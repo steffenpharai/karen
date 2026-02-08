@@ -4,9 +4,11 @@ import json
 
 import pytest
 from utils.reminders import (
+    add_reminder,
     format_reminders_for_llm,
     get_reminders_path,
     load_reminders,
+    save_reminders,
 )
 
 
@@ -37,3 +39,28 @@ def test_format_reminders_for_llm(sample_reminders):
     assert "Buy milk" not in out  # done
     out_2 = format_reminders_for_llm(sample_reminders, max_items=1)
     assert out_2.count(";") == 0 or "Call mom" in out_2
+
+
+@pytest.mark.unit
+def test_save_reminders(project_root):
+    from pathlib import Path
+
+    base = Path(project_root)
+    reminders = [{"text": "Test", "done": False}]
+    save_reminders(base, reminders)
+    assert get_reminders_path(base).exists()
+    assert load_reminders(base) == reminders
+
+
+@pytest.mark.unit
+def test_add_reminder(project_root):
+    from pathlib import Path
+
+    base = Path(project_root)
+    get_reminders_path(base).unlink(missing_ok=True)
+    add_reminder(base, "New task", "18:00")
+    loaded = load_reminders(base)
+    assert len(loaded) == 1
+    assert loaded[0]["text"] == "New task"
+    assert loaded[0]["time"] == "18:00"
+    assert loaded[0]["done"] is False

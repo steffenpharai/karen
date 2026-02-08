@@ -1,4 +1,4 @@
-"""E2E tests for main entry (help, dry-run, LLM one-shot)."""
+"""E2E tests for main entry (help, dry-run, LLM one-shot, orchestrator)."""
 
 import os
 import subprocess
@@ -131,3 +131,40 @@ def test_multi_llm_calls():
         assert isinstance(reply, str), f"call {i + 1}: expected str, got {type(reply)}"
         replies.append(reply)
     assert len(replies) == len(prompts), "expected one reply per prompt"
+
+
+@pytest.mark.e2e
+def test_main_help_includes_orchestrator():
+    """--orchestrator must appear in help."""
+    root = _project_root()
+    result = subprocess.run(
+        [sys.executable, "main.py", "--help"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={**os.environ, "PYTHONPATH": root},
+    )
+    assert result.returncode == 0
+    assert "orchestrator" in result.stdout.lower()
+
+
+@pytest.mark.e2e
+def test_main_orchestrator_starts_no_vision():
+    """Orchestrator with --no-vision starts and runs until timeout (no immediate crash)."""
+    root = _project_root()
+    try:
+        result = subprocess.run(
+            [sys.executable, "main.py", "--orchestrator", "--no-vision"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=4,
+            env={**os.environ, "PYTHONPATH": root},
+        )
+    except subprocess.TimeoutExpired:
+        # Process was still running after 4s — success
+        return
+    # If it exited before timeout, ensure it wasn't a crash
+    assert "Traceback" not in (result.stderr or ""), result.stderr
+    assert "Error" not in (result.stderr or "") or result.returncode == 0

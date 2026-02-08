@@ -9,7 +9,8 @@ Verified against [.cursor/plans/jarvis_jetson_implementation_2e9bf9f7.plan.md](.
 - **Install**: `bash scripts/install-ollama.sh` (official install script).
 - **Start with GPU**: `bash scripts/start-ollama.sh` (sets `OLLAMA_NUM_GPU=1`). API at `http://127.0.0.1:11434`.
 - **Pull model**: `ollama pull llama3.2:1b` (default in config) or `llama3.2:3b`. Config: `OLLAMA_MODEL=llama3.2:1b` in `config/settings.py`.
-- **Systemd (GPU)**: `sudo scripts/configure-ollama-systemd.sh` then `sudo systemctl daemon-reload && sudo systemctl restart ollama` — ensures `OLLAMA_NUM_GPU=1` and `LimitMEMLOCK=infinity` for the service.
+- **Systemd (GPU)**: `sudo scripts/configure-ollama-systemd.sh` then `sudo systemctl daemon-reload && sudo systemctl restart ollama` — ensures `OLLAMA_NUM_GPU=1`, `OLLAMA_NUM_CTX`, `OLLAMA_KEEP_ALIVE`, and `LimitMEMLOCK=infinity` for the service.
+- **Inspect Ollama config**: `sudo scripts/inspect-ollama-config.sh` to print effective env and override files; use to align `OLLAMA_NUM_CTX` with app config.
 - **Before first GPU use (optional)**: `sudo scripts/prepare-ollama-gpu.sh` to free GPU/RAM (jetson_clocks, drop caches); then start Ollama.
 - **Verified**: Ollama API at 127.0.0.1:11434 returns 200; `llama3.2:1b` present in `/api/tags`; systemd `ollama.service.d/gpu.conf` applied.
 
@@ -23,10 +24,11 @@ Verified against [.cursor/plans/jarvis_jetson_implementation_2e9bf9f7.plan.md](.
 - **Layout**: `main.py`, `config/`, `audio/`, `voice/`, `llm/`, `vision/`, `utils/`, `gui/`, `tests/`, `scripts/`, `requirements.txt`, `README.md` match plan §3.
 - **Lint**: `ruff check .` — all checks passed.
 - **Tests**: `pytest tests/` (unit + e2e). `pytest tests/ -m e2e` for E2E only.
-- **Entry**: `python main.py --help` — options include --dry-run, --e2e, --no-vision, --one-shot, --test-audio, --gui.
+- **Entry**: `python main.py --help` — options include --dry-run, --e2e, --no-vision, --one-shot, --orchestrator, --test-audio, --gui.
 - **Dry run**: `python main.py --dry-run` — config OK, ollama base URL and model reported.
 - **One-shot**: `python main.py --one-shot "Say hello..."` — LLM (Ollama) → Piper TTS → played.
 - **E2E**: `python main.py --e2e --no-vision` — full loop (wake word, STT, LLM, TTS). With vision: `python main.py --e2e` (requires camera and `models/yoloe26n.engine`; build with `bash scripts/export_yolo_engine.sh`).
+- **Orchestrator**: `python main.py --orchestrator --no-vision` — agentic loop (wake → STT → LLM with tools + context → TTS). Tools: vision_analyze, get_jetson_status, get_current_time, create_reminder, list_reminders, tell_joke, toggle_sarcasm. Session summary in `data/session_summary.json`.
 
 ## Summary
 
@@ -41,10 +43,12 @@ Verified against [.cursor/plans/jarvis_jetson_implementation_2e9bf9f7.plan.md](.
 | main.py --help / --dry-run   | OK     |
 | main.py --one-shot           | OK (LLM → TTS) |
 | main.py --e2e                | OK (full loop ± vision) |
+| main.py --orchestrator       | OK (agentic loop with tools + context) |
+| Ollama config (sudo inspect) | OK — scripts/inspect-ollama-config.sh, configure-ollama-systemd.sh |
 | Phases 1–5                   | Complete (voice, LLM, vision, GUI, error handling) |
 
 ## Production readiness
 
 - **Bootstrap**: `bash scripts/bootstrap_models.sh` to download openWakeWord (hey_jarvis), Faster-Whisper (small), Piper voice. Use `--with-yolo` to build `models/yolov8n.engine`.
 - **Ollama**: `ollama pull llama3.2:1b`; ensure service runs (systemd or `bash scripts/start-ollama.sh`).
-- **Validation**: `ruff check .`, `pytest tests/`, `pytest tests/ -m e2e`, `python main.py --dry-run`, `python main.py --one-shot "Say hello."`, `python main.py --e2e --no-vision`.
+- **Validation**: `ruff check .`, `pytest tests/`, `pytest tests/ -m e2e`, `python main.py --dry-run`, `python main.py --one-shot "Say hello."`, `python main.py --e2e --no-vision`, `python main.py --orchestrator --no-vision` (Ctrl+C to stop).

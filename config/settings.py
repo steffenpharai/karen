@@ -43,5 +43,13 @@ def yolo_engine_exists() -> bool:
     return os.path.isfile(YOLOE_ENGINE_PATH)
 
 
+# Orchestrator – context, memory, proactive
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+SUMMARY_PATH = os.path.join(DATA_DIR, "session_summary.json")
+CONTEXT_MAX_TURNS = int(os.environ.get("JARVIS_CONTEXT_MAX_TURNS", "8"))
+SUMMARY_EVERY_N_TURNS = int(os.environ.get("JARVIS_SUMMARY_EVERY_N", "6"))
+PROACTIVE_IDLE_SEC = int(os.environ.get("JARVIS_PROACTIVE_IDLE_SEC", "300"))
+MAX_TOOL_CALLS_PER_TURN = int(os.environ.get("JARVIS_MAX_TOOL_CALLS", "3"))
+
 # Optional GUI vision preview (Phase 5)
 JARVIS_PREVIEW_PATH = os.path.join(os.environ.get("TMPDIR", "/tmp"), "jarvis_preview.jpg")

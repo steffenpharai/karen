@@ -1,4 +1,5 @@
 # Virtual env (keep models/ and engines tracked)
+# Do NOT add models/*.engine – we never delete or ignore the TensorRT engine files we built (e.g. yoloe26n.engine, yolov8n.engine).
 venv/
 .venv/
 env/
@@ -32,6 +33,9 @@ Thumbs.db
 /tmp/
 *.tmp
 jarvis_preview.jpg
+
+# Orchestrator runtime (session summary, reminders)
+data/
 
 # Large files (GitHub 100 MB limit) – use Git LFS or bootstrap scripts to obtain
 models/mobileclip2_b.ts

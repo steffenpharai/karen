@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from config import settings
+
 from vision.scene import COCO_NAMES
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,10 @@ def draw_detections_on_frame(
 
 def run_live_visualization() -> None:
     """Open camera, run YOLOE-26N inference, draw detections, show in OpenCV window. Press 'q' to quit."""
+    import cv2
+
     from vision.camera import open_camera, read_frame
     from vision.detector_yolo import get_class_names, load_yolo_engine, run_inference
-
-    import cv2
 
     cap = open_camera(
         settings.CAMERA_INDEX,

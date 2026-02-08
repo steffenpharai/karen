@@ -61,6 +61,11 @@ def parse_args():
         action="store_true",
         help="Live camera + YOLOE-26N detections in OpenCV window (press q to quit).",
     )
+    parser.add_argument(
+        "--orchestrator",
+        action="store_true",
+        help="Run agentic orchestrator: wake → STT → LLM with tools + context → TTS (use --no-vision to disable camera).",
+    )
     return parser.parse_args()
 
 
@@ -213,7 +218,6 @@ def _handle_e2e(no_vision: bool):
             if frame_count % 15 == 0 and frame is not None:
                 try:
                     import cv2
-
                     from vision.visualize import draw_detections_on_frame
 
                     preview_path = settings.JARVIS_PREVIEW_PATH
@@ -412,8 +416,18 @@ def main() -> int:
         _handle_e2e(no_vision=args.no_vision)
         return 0
 
+    if args.orchestrator:
+        import asyncio
+
+        from orchestrator import run_orchestrator
+
+        Path(settings.DATA_DIR).mkdir(parents=True, exist_ok=True)
+        _set_gui_status("Listening")
+        asyncio.run(run_orchestrator(no_vision=args.no_vision))
+        return 0
+
     logger.info(
-        "Jarvis idle. Use --one-shot [PROMPT], --voice-only, --e2e (full loop), or --test-audio."
+        "Jarvis idle. Use --one-shot [PROMPT], --voice-only, --e2e (full loop), --orchestrator, or --test-audio."
     )
     return 0
 

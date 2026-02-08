@@ -189,11 +189,34 @@ python main.py --e2e --no-vision
 # Full loop with vision (camera + YOLOE/MediaPipe → LLM context)
 python main.py --e2e
 
+# Agentic orchestrator: wake → STT → LLM with tools (vision, time, reminders, jokes) → TTS
+python main.py --orchestrator
+python main.py --orchestrator --no-vision   # without camera
+
 # With status overlay (Listening / Thinking / Speaking)
 python main.py --e2e --gui
 ```
 
 Stop with `Ctrl+C`.
+
+### Orchestrator (agentic mode)
+
+With `--orchestrator`, Jarvis runs an async loop with **short- and long-term context**, **tool calling** (vision, Jetson status, time, reminders, jokes, sarcasm toggle), and **proactive** idle checks (e.g. vision every ~5 minutes). Session summary and reminders are stored under `data/`. Use `--no-vision` to disable the camera.
+
+### Ollama configuration (inspect and optimize)
+
+Context size and other limits can be set **server-side** (systemd). To inspect and tune for 8GB Jetson:
+
+```bash
+# Inspect effective env and override files (use sudo for systemd)
+sudo scripts/inspect-ollama-config.sh
+
+# Configure systemd: GPU + optional OLLAMA_NUM_CTX / OLLAMA_KEEP_ALIVE
+OLLAMA_NUM_CTX=1024 OLLAMA_KEEP_ALIVE=-1 sudo scripts/configure-ollama-systemd.sh
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+```
+
+Then run `sudo scripts/inspect-ollama-config.sh` again to verify. Keep app-side `OLLAMA_NUM_CTX` in `config/settings.py` (or env) consistent with the server.
 
 ## Options
 
@@ -202,14 +225,18 @@ Stop with `Ctrl+C`.
 | `--dry-run`    | Validate config and exit. |
 | `--test-audio` | List input devices and default sink/source. |
 | `--voice-only` | Wake word only; on trigger, play TTS "Hello Sir". |
-| `--e2e`        | Full loop: wake → record → STT → LLM → TTS. |
-| `--no-vision`  | Disable camera/vision context (use with `--e2e`). |
-| `--gui`        | Show status overlay (Listening / Thinking / Speaking). |
-| `--verbose`    | Debug logging. |
+| `--e2e`         | Full loop: wake → record → STT → LLM → TTS. |
+| `--orchestrator`| Agentic loop: wake → STT → LLM with tools + context → TTS. |
+| `--no-vision`   | Disable camera/vision context (use with `--e2e` or `--orchestrator`). |
+| `--gui`         | Show status overlay (Listening / Thinking / Speaking). |
+| `--verbose`     | Debug logging. |
 
 ## Project layout
 
 - `main.py` – Entry point and main loop.
+- `orchestrator.py` – Async agentic loop (context, tools, proactive).
+- `tools.py` – Local tools (vision, status, time, reminders, joke, sarcasm).
+- `memory.py` – Session summary and persistence.
 - `config/` – Settings and Jarvis system prompt.
 - `audio/` – Mic selection, recording, playback, Bluetooth hints.
 - `voice/` – Wake word, STT (Faster-Whisper), TTS (Piper).
