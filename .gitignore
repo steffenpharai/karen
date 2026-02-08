@@ -1,0 +1,39 @@
+# Virtual env (keep models/ and engines tracked)
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Testing / lint
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+/tmp/
+*.tmp
+jarvis_preview.jpg
+
+# Large files (GitHub 100 MB limit) – use Git LFS or bootstrap scripts to obtain
+models/mobileclip2_b.ts
+models/voices/*.onnx
+models/voices/*.onnx.json

@@ -1,0 +1,25 @@
+---
+description: Jarvis project – full automation, YOLO mode, E2E, Jetson Orin 2026+
+alwaysApply: true
+---
+
+# Jarvis – Autonomous Cursor Behavior
+
+## REQUIRED: Run, Don’t Just Write
+
+**Unacceptable:** Making code or doc changes without running the corresponding build/test/lint commands. Do not consider any task done after only editing files or adding documentation.
+
+**Required after code changes:** You MUST run the relevant commands and fix any failures before marking the task complete.
+
+- **Python**: After editing Python or adding tests: run `ruff check .`, `pytest` (or `pytest tests/unit/` / `pytest tests/e2e/ -m e2e` as appropriate), and `python main.py --help` (or the relevant entrypoint). Fix lint and test failures.
+- **Node/npm**: After editing JS/TS or package.json: run `npm install` if deps changed, then `npm run build` (or `npm test` / whatever the project’s scripts are). Fix build/test failures.
+- **Mixed or new code**: Run both Python and Node validation if both are touched. Run full suite (lint + unit tests; E2E where applicable) and fix failures.
+
+Only ask before running when the action is truly ambiguous or destructive (e.g. overwriting production data). Otherwise execute without asking.
+
+---
+
+- **YOLO mode**: Prefer executing changes (run tests, apply fixes, install deps) without asking. Only ask when truly ambiguous or destructive.
+- **Full automation**: Complete full flows (config → code → tests → **run commands**). Validation is not optional.
+- **E2E first**: For each phase (voice loop, LLM, vision), add or extend E2E tests in `tests/e2e/`. Prefer pytest with markers (e.g. `@pytest.mark.e2e`) and run unit vs e2e separately when needed.
+- **2026+ Jetson Orin Nano 8GB**: Target JetPack 6.x, L4T R36.x; TensorRT .engine built on-device; RAM budget <7.5 GB; MAXN_SUPER + jetson_clocks for perf. Use Ultralytics YOLOv8n → engine, INT8/FP16 when appropriate; prefer native Python 3.10 venv over Docker unless specified.

@@ -1,0 +1,31 @@
+# Core
+ollama>=0.3.0
+piper-tts>=1.2.0
+pathvalidate>=2.0.0
+faster-whisper>=1.0.0
+openwakeword>=0.6.0
+tflite-runtime>=2.14.0; sys_platform == "linux" and (platform_machine == "aarch64" or platform_machine == "x86_64")
+opencv-python-headless>=4.8.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+requests>=2.31.0
+
+# Vision (Jetson Orin – TensorRT on-device)
+ultralytics>=8.2.0
+mediapipe>=0.10.0
+
+# Optional: PyTorch use Jetson wheel from NVIDIA when on device
+# torch
+# torchvision
+
+# Dev & testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+ruff>=0.6.0
+
+# Optional: GUI vision preview (overlay with camera thumbnail)
+Pillow>=10.0.0
+
+# Optional: monitoring
+# pygame
+# jetson-stats

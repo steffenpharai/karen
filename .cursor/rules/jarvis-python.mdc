@@ -1,0 +1,14 @@
+---
+description: Python standards for Jarvis (audio, voice, LLM, vision)
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Jarvis Python Conventions
+
+- **Validate after edits**: After changing Python code, run `ruff check .` and `pytest` (and fix failures). See jarvis-automation rule—do not leave changes unvalidated.
+- **Structure**: Follow plan layout: `config/`, `audio/`, `voice/`, `llm/`, `vision/`, `utils/`. One clear responsibility per module.
+- **Async/threading**: Use threading for wake-word + vision so STT/LLM don't block capture. Prefer `asyncio` for I/O-bound LLM/TTS where it simplifies code.
+- **Resource limits**: Check RAM (e.g. via `utils/power.py`) before loading large models; cap Piper/Ollama concurrency. Log and degrade (smaller model, lower res) on OOM.
+- **Jetson**: Prefer `sounddevice`/`pyaudio` for device selection; TensorRT inference in `vision/` with .engine built on Orin; no hardcoded paths—use `config/settings.py`.
+- **Testing**: Unit tests in `tests/unit/`, E2E in `tests/e2e/`. Mock Ollama, Piper, and camera in unit tests; E2E can use `--e2e` or env to enable real hardware.
