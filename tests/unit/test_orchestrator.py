@@ -88,7 +88,7 @@ class TestRunOneTurnSync:
             patch("orchestrator.load_reminders", return_value=[]),
         ):
             result = _run_one_turn_sync("keep calling tools", memory, short_term, None)
-            assert "unable" in result.lower()
+            assert "afraid" in result.lower() or "unable" in result.lower()
 
     def test_with_vision_description(self, tmp_path):
         """Vision description is passed through to context."""
@@ -136,7 +136,7 @@ class TestRunOneTurnSync:
             patch("orchestrator.load_reminders", return_value=[]),
         ):
             result = _run_one_turn_sync("hi", memory, short_term, None)
-            assert "unable" in result.lower()
+            assert "afraid" in result.lower() or "unable" in result.lower()
 
 
 @pytest.mark.unit

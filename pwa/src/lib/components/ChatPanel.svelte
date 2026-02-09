@@ -38,7 +38,7 @@
 	>
 		{#if history.length === 0 && !isThinking}
 			<p class="text-center text-[var(--color-jarvis-muted)] text-sm mt-8">
-				Say something or type a message…
+				Awaiting your command, sir.
 			</p>
 		{/if}
 

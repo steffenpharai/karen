@@ -33,10 +33,10 @@ def test_toggle_sarcasm():
     orig = settings.SARCASM_ENABLED
     try:
         r = toggle_sarcasm(True)
-        assert "on" in r.lower()
+        assert "engaged" in r.lower()
         assert settings.SARCASM_ENABLED is True
         r2 = toggle_sarcasm(False)
-        assert "off" in r2.lower()
+        assert "disengaged" in r2.lower()
         assert settings.SARCASM_ENABLED is False
     finally:
         settings.SARCASM_ENABLED = orig
@@ -48,7 +48,7 @@ def test_list_reminders(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
     out = list_reminders()
     assert isinstance(out, str)
-    assert "No pending" in out or out == "Could not list reminders."
+    assert "No pending" in out or "couldn't retrieve" in out.lower()
 
 
 @pytest.mark.unit
@@ -70,7 +70,7 @@ def test_run_tool_create_reminder(tmp_path, monkeypatch):
     """Use a temp directory so test reminders don't pollute real data/."""
     monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
     out = run_tool("create_reminder", {"text": "Test reminder", "time_str": "18:00"})
-    assert "added" in out.lower() or "Reminder" in out or "Failed" in out
+    assert "logged" in out.lower() or "reminder" in out.lower() or "unable" in out.lower()
     # Verify it wrote to tmp, not the real data dir
     import json
     reminders = json.loads((tmp_path / "reminders.json").read_text())

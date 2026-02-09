@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument(
         "--voice-only",
         action="store_true",
-        help="Phase 1 test: wake → play TTS 'Hello Sir' (no STT/LLM)",
+        help="Phase 1 test: wake → play TTS 'At your service, sir' (no STT/LLM)",
     )
     parser.add_argument(
         "--test-audio",
@@ -79,21 +79,21 @@ def _set_gui_status(status: str) -> None:
 
 
 def _handle_voice_only():
-    """Phase 1: on wake, play a canned TTS 'Hello Sir'."""
+    """Phase 1: on wake, play a canned TTS 'At your service, sir.'"""
     from audio.output import play_wav
     from voice.tts import synthesize
     from voice.wakeword import run_wake_loop
 
     def on_wake():
         _set_gui_status("Speaking")
-        wav = synthesize("Hello, Sir.", voice=settings.TTS_VOICE)
+        wav = synthesize("At your service, sir.", voice=settings.TTS_VOICE)
         if wav:
             play_wav(wav)
         else:
             logger.warning("TTS failed, skipping playback")
         _set_gui_status("Listening")
 
-    logger.info("Voice-only test: say wake word to hear 'Hello Sir'")
+    logger.info("Voice-only test: say wake word to hear 'At your service, sir.'")
     _set_gui_status("Listening")
     stop = run_wake_loop(on_wake)
     try:
@@ -153,7 +153,7 @@ def _handle_one_shot(prompt: str):
         num_ctx=settings.OLLAMA_NUM_CTX,
     )
     if not (reply and reply.strip()):
-        reply = "I have no response, Sir."
+        reply = "I'm afraid I have nothing to report on that, sir."
     _set_gui_status("Speaking")
     wav = synthesize(reply.strip(), voice=settings.TTS_VOICE)
     if wav:
@@ -254,7 +254,7 @@ def _handle_e2e():
             text = transcribe(wav_path, model_size=settings.STT_MODEL_SIZE)
             Path(wav_path).unlink(missing_ok=True)
             if not (text and text.strip()):
-                reply = "I didn't catch that, Sir."
+                reply = "My apologies, sir. I didn't quite catch that."
             else:
                 with vision_lock:
                     v_desc = vision_description
@@ -279,9 +279,9 @@ def _handle_e2e():
                     system_stats=sys_stats,
                 )
                 if not is_ollama_available(settings.OLLAMA_BASE_URL):
-                    reply = "Ollama is unavailable, Sir. Please start the service."
+                    reply = "I'm afraid my language systems are offline, sir. The service requires a restart."
                 elif not is_ollama_model_available(settings.OLLAMA_BASE_URL, settings.OLLAMA_MODEL):
-                    reply = f"Model {settings.OLLAMA_MODEL} is not pulled, Sir. Run: ollama pull {settings.OLLAMA_MODEL}"
+                    reply = "I'm afraid the required language model hasn't been installed yet, sir."
                 else:
                     _set_gui_status("Thinking (LLM)")
                     reply = ""
@@ -310,14 +310,14 @@ def _handle_e2e():
                                 logger.info("Used fallback model after OOM")
                             except Exception as e2:
                                 logger.exception("Fallback model also failed: %s", e2)
-                                reply = "I'm overloaded, Sir. Try a smaller model."
+                                reply = "I appear to be overtaxed at the moment, sir. Might I suggest a lighter configuration."
                         else:
                             if "memory" in str(e).lower() or "oom" in str(e).lower():
                                 logger.warning("OOM during LLM; try a smaller model")
-                            reply = "I encountered an error, Sir. Try again or use a smaller model."
+                            reply = "I've encountered a slight complication, sir. Shall we try again, perhaps with a lighter configuration."
                             logger.exception("Ollama error: %s", e)
                     if not (reply and reply.strip()):
-                        reply = "I have no response for that, Sir."
+                        reply = "I'm afraid I have nothing of substance to offer on that, sir."
             _set_gui_status("Speaking")
             wav_out = synthesize(reply.strip(), voice=settings.TTS_VOICE)
             if wav_out:

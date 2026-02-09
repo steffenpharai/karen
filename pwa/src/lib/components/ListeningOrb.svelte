@@ -19,11 +19,11 @@
 	});
 
 	let label = $derived.by(() => {
-		if (wake) return 'Wake Detected';
-		if (listening) return 'Listening…';
-		if (status.includes('Thinking')) return 'Thinking…';
-		if (status.includes('Speaking')) return 'Speaking…';
-		return 'Ready';
+		if (wake) return 'At Your Service';
+		if (listening) return 'Listening, sir…';
+		if (status.includes('Thinking')) return 'Processing, sir…';
+		if (status.includes('Speaking')) return 'Responding…';
+		return 'Standing By';
 	});
 </script>
 

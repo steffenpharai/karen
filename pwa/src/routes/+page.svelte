@@ -66,7 +66,7 @@
 </script>
 
 <svelte:head>
-	<title>Jarvis</title>
+	<title>J.A.R.V.I.S.</title>
 </svelte:head>
 
 <Toast />

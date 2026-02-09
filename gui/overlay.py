@@ -39,7 +39,7 @@ def get_latest_frame_path() -> str | None:
 def run_overlay(update_interval_ms: int = 200) -> None:
     """Run the status overlay window (blocking). Call from main thread or a dedicated GUI thread."""
     root = Tk()
-    root.title("Jarvis")
+    root.title("J.A.R.V.I.S.")
     root.geometry("320x280")
     root.configure(bg="black")
     root.attributes("-topmost", True)

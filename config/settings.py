@@ -1,9 +1,12 @@
 """Paths, model names, RAM/thermal limits for Jetson Orin Nano 8GB Super (MAXN_SUPER).
 
-Performance tuning for <10 s LLM response:
-  - num_ctx 2048 (halves KV cache vs 4096, more GPU layers)
-  - num_predict 256 (voice replies are short)
-  - think=false (disables Qwen3 hidden reasoning tokens – biggest latency win)
+Performance tuning for <10 s LLM response (Qwen3:1.7b):
+  - num_ctx 8192  (100% GPU at 2.0 GB; 3.5x faster than 2048 – eliminates
+    KV-cache thrashing that added ~9 s per request with the old Llama3.2 limit)
+  - num_predict 512 (Qwen3 think tokens count toward predict budget;
+    256 caused empty responses when reasoning chain consumed all tokens)
+  - think=false for plain chat; think=true for tool calls (Qwen3 requires
+    its reasoning chain to route tool schemas — official Qwen3 behaviour)
   - Reduced tool set (time/stats/reminders already in context)
 """
 
@@ -22,16 +25,25 @@ RAM_BUDGET_GIB = 7.5
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:1.7b")
 OLLAMA_FALLBACK_MODEL = os.environ.get("OLLAMA_FALLBACK_MODEL", "qwen3:1.7b")
-# Context size (KV cache).  2048 keeps KV cache small so more model layers fit
-# on GPU (avoids the 66% CPU / 34% GPU split that kills throughput).
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "2048"))
-# Hard cap – prevents OOM; 2048 is the safe ceiling with YOLOE + desktop running.
-OLLAMA_NUM_CTX_MAX = 2048
-# Max output tokens – voice replies should be 1-3 sentences (~60-100 tokens).
-# 256 gives ample room without wasting generation time.
-OLLAMA_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "256"))
-# Disable Qwen3 <think> reasoning blocks.  Thinking adds 10–20 s of hidden token
-# generation that provides zero value for a concise voice assistant.
+# Context size (KV cache).  Qwen3:1.7b (1.4 GB weights, Q4_K_M) fits 100% GPU
+# up to ~12 288 ctx on 8 GB Jetson.  8192 is the production sweet spot:
+#   - 2.0 GB total model footprint (weights + KV), 100% GPU
+#   - 3.5 s chat latency vs 12.9 s at 2048 (KV-cache thrashing eliminated)
+#   - Ample room for system prompt + 4 tool schemas + 4-turn history
+# The old 2048 limit was sized for Llama3.2:3b (~2 GB weights); Qwen3:1.7b
+# is 600 MB lighter, freeing that headroom for a larger KV cache.
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+# Hard cap – 8192 keeps us 100% GPU; 12288 works but increases swap pressure;
+# 16384 spills to 30% CPU / 70% GPU (unacceptable latency).
+OLLAMA_NUM_CTX_MAX = int(os.environ.get("OLLAMA_NUM_CTX_MAX", "8192"))
+# Max output tokens.  Qwen3's thinking tokens (<think>…</think>) count toward
+# num_predict.  A typical think chain is ~80-120 tokens; a 1-2 sentence reply
+# is ~30-60 tokens.  512 gives comfortable headroom for both.  The old 256
+# caused empty responses when think=true consumed the entire budget.
+OLLAMA_NUM_PREDICT = int(os.environ.get("OLLAMA_NUM_PREDICT", "512"))
+# Default think=false for plain chat (fast).  chat_with_tools() forces
+# think=true when tools are present — Qwen3 requires its reasoning chain
+# to route tool schemas (confirmed: 1.7b cannot select tools without it).
 OLLAMA_THINK = os.environ.get("OLLAMA_THINK", "0") == "1"
 # Temperature – lower = faster convergence, more deterministic for voice.
 OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.6"))

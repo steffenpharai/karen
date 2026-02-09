@@ -19,7 +19,7 @@
 >
 	<div class="flex items-center gap-3">
 		<h1 class="font-[var(--font-heading)] text-[var(--color-jarvis-cyan)] text-lg font-bold tracking-widest uppercase">
-			Jarvis
+			J.A.R.V.I.S.
 		</h1>
 		<span
 			class="inline-block w-2.5 h-2.5 rounded-full {statusColors[connStatus]}"

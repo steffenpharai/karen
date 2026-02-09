@@ -176,7 +176,8 @@ class TestOomDetection:
 @pytest.mark.unit
 class TestSafeNumCtx:
     def test_caps_at_max(self):
-        assert _safe_num_ctx(8192) <= 2048
+        # Qwen3:1.7b supports 8192 (100% GPU, 2.0 GB); cap was raised from 2048
+        assert _safe_num_ctx(16384) <= 8192
 
     def test_minimum(self):
         assert _safe_num_ctx(10) == 128

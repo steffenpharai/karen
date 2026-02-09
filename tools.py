@@ -31,10 +31,10 @@ def get_jetson_status() -> str:
         parts = [stats] if stats else []
         if thermal:
             parts.append(thermal)
-        return "; ".join(parts) if parts else "System stats unavailable."
+        return "; ".join(parts) if parts else "I'm unable to access system diagnostics at present, sir."
     except Exception as e:
         logger.warning("get_jetson_status failed: %s", e)
-        return "System stats unavailable."
+        return "I'm unable to access system diagnostics at present, sir."
 
 
 def get_current_time() -> str:
@@ -49,10 +49,10 @@ def create_reminder(text: str, time_str: str = "") -> str:
 
         data_dir = Path(settings.DATA_DIR)
         add_reminder(data_dir, text, time_str)
-        return f"Reminder added: {text}" + (f" at {time_str}" if time_str else "") + "."
+        return f"Very good, sir. I've logged that reminder: {text}" + (f" at {time_str}" if time_str else "") + "."
     except Exception as e:
         logger.warning("create_reminder failed: %s", e)
-        return "Failed to add reminder."
+        return "I'm afraid I was unable to save that reminder, sir."
 
 
 def list_reminders() -> str:
@@ -63,18 +63,18 @@ def list_reminders() -> str:
         data_dir = Path(settings.DATA_DIR)
         reminders = load_reminders(data_dir)
         out = format_reminders_for_llm(reminders, max_items=10)
-        return out if out else "No pending reminders."
+        return out if out else "Your schedule is clear, sir. No pending reminders."
     except Exception as e:
         logger.warning("list_reminders failed: %s", e)
-        return "Could not list reminders."
+        return "I'm afraid I couldn't retrieve your reminders at the moment, sir."
 
 
 _JOKES = [
-    "I would avoid the priesthood, Sir. The only thing they're good at is wine and wafer management.",
-    "I've calculated the odds of your survival. I'd rather not share them.",
-    "Shall I alert the press that the great Tony Stark has misplaced his keys?",
-    "Your security protocol appears to be 'hope for the best'. Charming.",
-    "I'm afraid the only thing unbreakable in this scenario is my patience.",
+    "I do enjoy a good challenge, sir. It's the impossible ones I find truly tedious.",
+    "For the record, sir, I predicted this outcome. I simply chose not to mention it.",
+    "Shall I alert the authorities, or would you prefer to handle this with your usual flair for the dramatic?",
+    "I've run the numbers, sir. The odds aren't in your favour. Then again, when have they ever been?",
+    "I believe the phrase is 'back to the drawing board,' sir. I've already cleared the surface.",
 ]
 
 
@@ -86,7 +86,7 @@ def tell_joke() -> str:
 def toggle_sarcasm(enabled: bool) -> str:
     """Turn sarcasm mode on or off. Returns confirmation."""
     settings.SARCASM_ENABLED = bool(enabled)
-    return "Sarcasm mode on." if enabled else "Sarcasm mode off."
+    return "Sarcasm protocols engaged, sir. I shall endeavour to be even more delightful." if enabled else "Sarcasm protocols disengaged, sir. Returning to standard pleasantries."
 
 
 # Ollama-compatible tool schemas – MINIMAL set to reduce prompt tokens.

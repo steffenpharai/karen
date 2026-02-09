@@ -1,12 +1,14 @@
 """HTTP client to local Ollama (streaming optional).
 
-Jetson Orin Nano 8GB Super — performance-optimised:
-  - num_ctx capped to OLLAMA_NUM_CTX_MAX (default 2048) to maximise GPU layer offload
-  - think=false disables Qwen3 hidden reasoning tokens (saves 10–20 s)
-  - num_predict capped to keep voice replies short
-  - 30 s request timeout (voice assistant must respond quickly)
+Jetson Orin Nano 8GB Super — Qwen3:1.7b performance-optimised:
+  - num_ctx default 8192 (100% GPU at 2.0 GB; 3.5x faster than old 2048 limit)
+  - think=false for plain chat; think=true for tool calls (Qwen3 requires
+    reasoning chain to route tool schemas on 1.7b — official Qwen3 behaviour)
+  - num_predict 512 (thinking tokens count toward budget; 256 starved content)
+  - 30 s timeout for chat; 60 s for tool calls (think chain adds ~2-4 s)
   - On CUDA OOM: unload model, drop kernel caches, retry with smaller context
-  - Flash attention and q8_0 KV cache set via systemd env
+  - Flash attention + q8_0 KV cache set via systemd env (OLLAMA_FLASH_ATTENTION,
+    OLLAMA_KV_CACHE_TYPE)
   - Text-based fallback parser strips JSON / tool-call leakage from small models
 """
 
@@ -213,8 +215,9 @@ def _recover_from_oom(base_url: str, model: str) -> None:
     time.sleep(1)
 
 
-# OOM retry sequence: try smaller context until one works
-_OOM_RETRY_NUM_CTX = [2048, 1024, 512]
+# OOM retry sequence: step down context until one fits.
+# 8192 → 4096 → 2048 → 1024 covers the realistic range on 8 GB Jetson.
+_OOM_RETRY_NUM_CTX = [8192, 4096, 2048, 1024]
 
 
 def chat(
@@ -222,13 +225,13 @@ def chat(
     model: str,
     messages: list[dict],
     stream: bool = False,
-    num_ctx: int = 2048,
+    num_ctx: int = 8192,
 ) -> str:
     """Send chat request to Ollama; return full response content.
 
     Performance settings applied automatically:
-      - num_ctx capped to OLLAMA_NUM_CTX_MAX (default 2048)
-      - think=false disables Qwen3 reasoning tokens
+      - num_ctx capped to OLLAMA_NUM_CTX_MAX (default 8192)
+      - think=false disables Qwen3 reasoning tokens (fast path)
       - num_predict limits output length
       - 30 s timeout for voice-assistant responsiveness
     On CUDA OOM: unloads model, drops kernel caches, retries with smaller context.
@@ -280,11 +283,19 @@ def chat_with_tools(
     messages: list[dict],
     tools: list[dict],
     stream: bool = False,
-    num_ctx: int = 2048,
+    num_ctx: int = 8192,
 ) -> dict:
     """Send chat request with tools; return dict with 'content' and 'tool_calls'.
 
-    Performance: think=false, num_predict, temperature applied automatically.
+    Performance: num_predict, temperature applied automatically.
+
+    ``think`` is set **True** when tools are present.  Qwen3's Hermes-style
+    tool template requires the reasoning chain to decide whether to call a
+    tool — without it the 1.7b model ignores tool schemas entirely.  This is
+    documented Qwen3 behaviour (qwen.readthedocs.io/en/latest/framework/
+    function_call.html), not a workaround.  Regular ``chat()`` keeps
+    think=False for speed.
+
     If the model leaks tool calls as text, ``_extract_text_tool_calls`` parses them.
     Final content is cleaned via ``_clean_llm_content`` to strip JSON residue.
 
@@ -293,18 +304,26 @@ def chat_with_tools(
     num_ctx = _safe_num_ctx(num_ctx)
     url = f"{base_url.rstrip('/')}/api/chat"
     perf = _get_perf_options()
-    think = _get_think_flag()
+    # Qwen3 needs think=True to reason about tool usage; without it the model
+    # ignores tool schemas and generates plain text instead.
+    # Empty tools list → no tool reasoning needed → use fast path.
+    has_tools = bool(tools)
+    think = True if has_tools else _get_think_flag()
+    timeout = 60 if has_tools else 30  # think chain adds 2-4 s overhead
     for try_ctx in [num_ctx] + [c for c in _OOM_RETRY_NUM_CTX if c < num_ctx]:
         payload = {
             "model": model,
             "messages": messages,
             "stream": stream,
             "think": think,
-            "tools": tools,
             "options": {"num_ctx": try_ctx, **perf},
         }
+        # Only include tools key when tools are present; omitting it entirely
+        # tells Ollama to skip tool-template injection (saves ~200 prompt tokens).
+        if has_tools:
+            payload["tools"] = tools
         try:
-            r = requests.post(url, json=payload, timeout=30)
+            r = requests.post(url, json=payload, timeout=timeout)
             if r.status_code == 200:
                 data = r.json()
                 msg = data.get("message") or {}

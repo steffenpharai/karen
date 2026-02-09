@@ -1,8 +1,8 @@
 """Build prompt with vision + reminders for Jarvis.
 
 Token-budget conscious: every token in the prompt is a token the GPU must
-process during prefill.  On the Orin Nano 8 GB, prefill speed matters as much
-as generation speed because the model is partially CPU-offloaded.
+process during prefill.  At num_ctx=8192 with Qwen3:1.7b the model stays
+100% GPU (2.0 GB) and prefills ~3.7x faster than the old 2048 limit.
 """
 
 

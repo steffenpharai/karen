@@ -38,6 +38,51 @@ _VISION_KEYWORDS = _re.compile(
     _re.IGNORECASE,
 )
 
+# ── Intent-based tool routing ────────────────────────────────────────
+# Only send tool schemas when the query likely needs a tool.  This prevents
+# Qwen3:1.7b from wasting its 512-token think budget reasoning about tools
+# on simple greetings/status queries, which caused empty responses.
+# This is the standard production pattern (Alexa, Rasa, Dialogflow) for
+# resource-constrained NLU: deterministic intent routing before LLM.
+_TOOL_INTENT_PATTERNS: dict[str, _re.Pattern] = {
+    "tell_joke": _re.compile(
+        r'\b(joke|funny|something funny|laugh|humou?r|make me (laugh|smile)|amuse)\b',
+        _re.IGNORECASE,
+    ),
+    "create_reminder": _re.compile(
+        r'\b(remind|reminder|don.t forget|set.*(remind|alarm|timer)|remember to)\b',
+        _re.IGNORECASE,
+    ),
+    "toggle_sarcasm": _re.compile(
+        r'\b(sarcas[mt]|sarcastic|snark)\b',
+        _re.IGNORECASE,
+    ),
+    # vision_analyze is only for explicit re-scan requests.  Initial vision is
+    # pre-fetched by the orchestrator via _VISION_KEYWORDS before the LLM call.
+    "vision_analyze": _re.compile(
+        r'\b(re-?scan|scan again|look again|check again|another look|refresh.*(camera|view))\b',
+        _re.IGNORECASE,
+    ),
+}
+
+
+def _select_tools_for_query(query: str) -> list[dict]:
+    """Return only the tool schemas whose intent matches the query.
+
+    If no tool intent is detected, returns an empty list so the LLM runs
+    without tools (think=false fast path).  This keeps simple queries
+    (greetings, status, time, goodnight) at 3-5 s instead of 15+ s.
+    """
+    matched_names: set[str] = set()
+    for tool_name, pattern in _TOOL_INTENT_PATTERNS.items():
+        if pattern.search(query):
+            matched_names.add(tool_name)
+
+    if not matched_names:
+        return []
+
+    return [schema for schema in TOOL_SCHEMAS if schema["function"]["name"] in matched_names]
+
 
 def _gui_status(status: str) -> None:
     """Default status callback: forward to the Tkinter overlay (if running)."""
@@ -130,6 +175,10 @@ def _run_one_turn_sync(
         max_turns=settings.CONTEXT_MAX_TURNS,
     )
 
+    # Intent-based tool routing: only send tools the query actually needs.
+    # Empty list → chat_with_tools uses think=false (fast, no tool reasoning).
+    selected_tools = _select_tools_for_query(query)
+
     max_rounds = min(MAX_TOOL_ROUNDS, settings.MAX_TOOL_CALLS_PER_TURN)
     final_answer = ""
     for _ in range(max_rounds):
@@ -137,7 +186,7 @@ def _run_one_turn_sync(
             settings.OLLAMA_BASE_URL,
             settings.OLLAMA_MODEL,
             messages,
-            TOOL_SCHEMAS,
+            selected_tools,
             stream=False,
             num_ctx=settings.OLLAMA_NUM_CTX,
         )
@@ -154,7 +203,7 @@ def _run_one_turn_sync(
             messages.append({"role": "tool", "tool_name": name, "content": result})
 
     if not final_answer:
-        final_answer = "I'm unable to complete that, Sir."
+        final_answer = "I'm afraid I wasn't able to complete that request, sir."
     return final_answer
 
 
@@ -238,7 +287,7 @@ async def run_orchestrator(
                         None, run_tool, "vision_analyze", {"prompt": "person"},
                     )
                     if "person" in obs and "detected" in obs.lower():
-                        say_text = "Sir, you appear to be at your desk. A short break is recommended."
+                        say_text = "Sir, you've been at your desk for quite some time. Might I suggest a brief respite? Even Mr. Stark took the occasional break."
                         wav = await loop.run_in_executor(
                             None, synthesize, say_text, settings.TTS_VOICE,
                         )
@@ -251,7 +300,7 @@ async def run_orchestrator(
 
             if not query or not str(query).strip():
                 status_cb("Speaking")
-                no_catch = "I didn't catch that, Sir."
+                no_catch = "My apologies, sir. I didn't quite catch that."
                 wav = await loop.run_in_executor(
                     None, synthesize, no_catch, settings.TTS_VOICE,
                 )
@@ -289,7 +338,7 @@ async def run_orchestrator(
                 except Exception as e:
                     logger.exception("Turn failed (attempt %s): %s", attempt + 1, e)
                     if attempt >= STT_LLM_RETRIES:
-                        final = "Brief glitch, Sir — please try again."
+                        final = "A momentary glitch in my systems, sir. Shall we try that again?"
                     else:
                         final = "Retrying."
             status_cb("Speaking")
