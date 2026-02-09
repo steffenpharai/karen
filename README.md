@@ -1,25 +1,42 @@
-# Jarvis – Offline Voice Assistant on Jetson Orin Nano Super
+# J.A.R.V.I.S. – Offline Voice Assistant on Jetson Orin Nano Super
 
-A fully offline, Jarvis-like personal AI assistant for the **Jetson Orin Nano Super Developer Kit (8GB)** with JetPack 6.x. Uses Bluetooth (e.g. Google Pixel Buds 2) for mic and TTS output, USB webcam for vision, and runs LLM (Ollama/Qwen3), STT (Faster-Whisper), TTS (Piper), and wake word (openWakeWord) locally.
+A fully offline AI assistant modelled on **J.A.R.V.I.S.** from the Iron Man films (Paul Bettany's portrayal), running on the **Jetson Orin Nano Super Developer Kit (8GB)** with JetPack 6.x. Uses Bluetooth (e.g. Google Pixel Buds 2) for mic and TTS output, USB webcam for vision, and runs LLM (Ollama/Qwen3), STT (Faster-Whisper), TTS (Piper), and wake word (openWakeWord) locally.
 
 Includes a **SvelteKit PWA** frontend served over the LAN and a **FastAPI WebSocket bridge** so you can chat, view the camera feed, and manage reminders from any device on the network.
 
 ## Performance
 
-Optimised for **sub-10-second** end-to-end response (query → spoken reply) on the 8 GB Jetson:
+Optimised for **sub-2-second** chat and **sub-10-second** tool calls on the 8 GB Jetson:
 
 | Tuning | Value | Why |
 |--------|-------|-----|
-| Model | `qwen3:1.7b` | Native tool-calling, fits 100% on GPU at 2048 ctx |
-| Context window | 2048 tokens | Halves KV cache vs 4096; enables full GPU offload |
-| Thinking | Disabled (`think=false`) | Qwen3 reasoning adds 10–20 s of hidden tokens — useless for a voice assistant |
-| Output cap | 256 tokens (`num_predict`) | Voice replies are 1–3 sentences |
+| Model | `qwen3:1.7b` (Q4_K_M, 1.4 GB) | Native tool-calling, fits 100% GPU at 8192 ctx |
+| Context window | **8192 tokens** | 100% GPU at 2.0 GB total; 3.5x faster than old 2048 (eliminates KV-cache thrashing) |
+| Thinking | **Adaptive** — `think=false` for chat, `think=true` for tools | Qwen3 requires reasoning chain for tool routing; plain chat skips it for speed |
+| Output cap | **512 tokens** (`num_predict`) | Qwen3 thinking tokens count toward budget; 256 starved content |
 | Temperature | 0.6 | Faster convergence, deterministic |
-| GPU offload | **100% GPU** | Reduced `GPU_OVERHEAD` to 1.5 GB; previously 66% CPU / 34% GPU |
+| GPU offload | **100% GPU** (2.0 GB) | Old 2048 limit was sized for Llama3.2:3b; Qwen3:1.7b is 600 MB lighter |
+| Tool routing | **Intent-based** | Only sends tool schemas when query matches keywords; prevents wasted think budget |
 | Tool schemas | 4 (was 7) | Time, stats, reminders already injected into context |
-| History | 4 turns (was 8) | Less prefill work for the GPU |
+| History | 4 turns | Less prefill work for the GPU |
 
-Warm inference on a typical orchestrator query: **~0.7–1.0 s**.
+Benchmarked latencies (warm, 100% GPU):
+
+| Scenario | Latency | Mode |
+|----------|---------|------|
+| Greeting / status / time | **0.5–0.7 s** | `think=false`, no tools |
+| Tool call (joke, reminder, sarcasm) | **3.6–8.4 s** | `think=true`, selected tools only |
+| Vision query (pre-fetched) | **0.7 s** | `think=false`, scene in context |
+
+Context size benchmarks (Jetson Orin Nano 8 GB, Qwen3:1.7b):
+
+| num_ctx | Model Size | GPU% | Chat Latency |
+|---------|-----------|------|-------------|
+| 2048 | 1.6 GB | 100% | 12.9 s (KV thrashing) |
+| 4096 | 1.7 GB | 100% | 4.1 s |
+| **8192** | **2.0 GB** | **100%** | **3.5 s** ← production |
+| 12288 | 2.3 GB | 100% | ~4 s (swap pressure) |
+| 16384 | 2.6 GB | 30/70 CPU/GPU | slow (unacceptable) |
 
 ## Requirements
 
@@ -136,12 +153,13 @@ On the Orin Nano, GPU and CPU share the same 7.6 GiB RAM. The project configures
 | **systemd** | `OLLAMA_KV_CACHE_TYPE=q8_0` | 8-bit KV cache (halves memory vs f16) |
 | **systemd** | `OLLAMA_NUM_PARALLEL=1` | No duplicate KV caches |
 | **systemd** | `OLLAMA_MAX_LOADED_MODELS=1` | Only one model in GPU at a time |
-| **systemd** | `OLLAMA_CONTEXT_LENGTH=2048` | Default context length for small KV cache |
+| **systemd** | `OLLAMA_CONTEXT_LENGTH=8192` | Default context length (Qwen3:1.7b sweet spot) |
 | **systemd** | `OLLAMA_GPU_OVERHEAD=1500000000` | Reserve ~1.5 GB for X11/GNOME/Cursor/YOLOE |
 | **systemd** | `OLLAMA_KEEP_ALIVE=5m` | Unload model after 5 min idle |
-| **Python** | `num_ctx=2048`, `num_predict=256` | Cap context and output per request |
-| **Python** | `think=false` | Disable Qwen3 hidden reasoning tokens |
-| **Python** | OOM recovery | On CUDA OOM: unload model, drop caches, retry with smaller ctx |
+| **Python** | `num_ctx=8192`, `num_predict=512` | Cap context and output per request |
+| **Python** | `think=false` (chat) / `think=true` (tools) | Adaptive: Qwen3 needs reasoning for tool routing |
+| **Python** | Intent-based tool routing | Only sends tool schemas when query matches keywords |
+| **Python** | OOM recovery | On CUDA OOM: unload model, drop caches, retry with smaller ctx (8192→4096→2048→1024) |
 
 Apply all settings:
 
@@ -149,7 +167,7 @@ Apply all settings:
 sudo bash scripts/configure-ollama-systemd.sh
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# Verify: should show 100% GPU, context 2048
+# Verify: should show 100% GPU, context 8192
 ollama ps
 ```
 
@@ -237,15 +255,25 @@ Connect from any device on the LAN: `http://<jetson-ip>:8000`.
 
 ### Orchestrator (agentic mode)
 
-With `--orchestrator` or `--serve`, Jarvis runs an async loop with **short- and long-term context**, **tool calling** (vision, reminders, jokes, sarcasm toggle), and **proactive** idle checks. Session summary and reminders are stored under `data/`.
+With `--orchestrator` or `--serve`, J.A.R.V.I.S. runs an async loop with **short- and long-term context**, **intent-based tool routing**, and **proactive** idle checks. Session summary and reminders are stored under `data/`.
 
-Tools available to the LLM (via Ollama tool-calling):
+**Intent-based tool routing**: instead of sending all tool schemas on every request (which wastes the 1.7b model's think budget on simple queries), the orchestrator uses deterministic keyword matching to decide which tools — if any — to include. This is the standard production pattern used by Alexa, Rasa, and Dialogflow for resource-constrained NLU.
+
+| Query type | Route | Think | Latency |
+|------------|-------|-------|---------|
+| Greeting, status, time, goodnight | No tools, `think=false` | No | 0.5–0.7 s |
+| "Tell me a joke" | `tell_joke` only, `think=true` | Yes | ~6 s |
+| "Remind me to..." | `create_reminder` only, `think=true` | Yes | ~8 s |
+| "Turn on sarcasm" | `toggle_sarcasm` only, `think=true` | Yes | ~4 s |
+| "Re-scan the camera" | `vision_analyze` only, `think=true` | Yes | ~5 s |
+
+Tools available to the LLM (via Ollama Hermes-style tool-calling):
 
 | Tool | Description |
 |------|-------------|
 | `vision_analyze` | Re-scan camera with optional focus prompt |
 | `create_reminder` | Save a reminder with optional time |
-| `tell_joke` | Tell a witty one-liner |
+| `tell_joke` | Tell a witty one-liner (J.A.R.V.I.S.-style dry wit) |
 | `toggle_sarcasm` | Toggle sarcasm mode |
 
 Time, system stats, scene description, and pending reminders are **injected directly into the user context** — the LLM doesn't need tools for those.
@@ -313,9 +341,10 @@ data/                Session summaries and reminders (runtime)
 |----------|---------|-------------|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `qwen3:1.7b` | Default LLM model |
-| `OLLAMA_NUM_CTX` | `2048` | Context window size |
-| `OLLAMA_NUM_PREDICT` | `256` | Max output tokens |
-| `OLLAMA_THINK` | `0` | Set to `1` to enable Qwen3 thinking |
+| `OLLAMA_NUM_CTX` | `8192` | Context window size (100% GPU sweet spot for Qwen3:1.7b) |
+| `OLLAMA_NUM_CTX_MAX` | `8192` | Hard cap (12288 works but swap pressure; 16384 spills to CPU) |
+| `OLLAMA_NUM_PREDICT` | `512` | Max output tokens (includes Qwen3 thinking tokens) |
+| `OLLAMA_THINK` | `0` | Global think flag; `chat_with_tools` forces `true` when tools present |
 | `OLLAMA_TEMPERATURE` | `0.6` | Sampling temperature |
 | `JARVIS_CAMERA_INDEX` | `0` | Camera device index |
 | `JARVIS_CAMERA_DEVICE` | (none) | Force camera device path |
@@ -327,8 +356,8 @@ data/                Session summaries and reminders (runtime)
 ## Troubleshooting
 
 - **Ollama OOM / cudaMalloc failed**: Run `sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'` before model load to reclaim buff/cache. Apply OOM-prevention settings with `sudo bash scripts/configure-ollama-systemd.sh`. The Python client also auto-recovers: on OOM it unloads the model, drops caches, and retries with smaller context.
-- **Model only partially on GPU** (`ollama ps` shows CPU%): Reduce `OLLAMA_GPU_OVERHEAD` in the systemd drop-in and/or reduce `OLLAMA_NUM_CTX`. Close unnecessary desktop apps.
-- **Slow responses (>10 s)**: Ensure `think=false` is working (`OLLAMA_THINK=0`), `num_ctx=2048`, and model is 100% GPU (`ollama ps`).
+- **Model only partially on GPU** (`ollama ps` shows CPU%): Drop caches (`sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'`), restart Ollama, then load model. Memory fragmentation from repeated context-size changes can cause spill. If persistent, reduce `OLLAMA_GPU_OVERHEAD` or `OLLAMA_NUM_CTX`. Close unnecessary desktop apps.
+- **Slow responses (>10 s)**: Check `ollama ps` — model should be 100% GPU at 8192 ctx. If CPU% is >0, drop caches (`sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'`) and restart Ollama. For plain chat, ensure intent routing is sending no tools (queries without tool keywords should be 0.5–0.7 s).
 - **Bluetooth mic not working**: Prefer HFP profile for the buds or use a USB microphone and keep A2DP for output.
 - **Piper not found**: Ensure `piper-tts` is installed in the venv and the voice model exists at the configured path.
 - **Ollama connection refused**: Start Ollama with `ollama serve` or check `systemctl status ollama`.
