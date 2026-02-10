@@ -48,8 +48,10 @@ def transcribe(audio_path: str, model_size: str = "small") -> str | None:
 
 
 def is_stt_available() -> bool:
-    """Check if STT backend is available."""
+    """Check if STT backend (faster-whisper) is importable."""
     try:
+        from faster_whisper import WhisperModel  # noqa: F401
+
         return True
-    except Exception:
+    except ImportError:
         return False

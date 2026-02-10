@@ -101,7 +101,7 @@ def maybe_summarize(
             prev = memory.get("summary", "")
             memory["summary"] = (prev + " " + new_summary.strip()).strip() if prev else new_summary.strip()
             memory["summary"] = memory["summary"][:1500]  # cap length
-            save_session(memory)
+            # Note: caller (orchestrator._bg_summarize) is responsible for save_session.
             logger.debug("Updated rolling summary (%s chars)", len(memory["summary"]))
     except Exception as e:
         logger.warning("Summarization failed: %s", e)

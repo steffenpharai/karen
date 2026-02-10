@@ -155,7 +155,17 @@ class Bridge:
             await self._handle_get_status()
 
         elif msg_type == "interrupt":
-            logger.debug("Client requested interrupt (not yet implemented)")
+            # Interrupt: clear the query queue so pending queries are dropped,
+            # and notify all clients that the current action was interrupted.
+            if self._query_queue is not None:
+                while not self._query_queue.empty():
+                    try:
+                        self._query_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+            await self.broadcast({"type": "status", "status": "Listening"})
+            await self.broadcast({"type": "reply", "text": "Very well, sir."})
+            logger.debug("Client requested interrupt — queue cleared")
 
         elif msg_type == "sarcasm_toggle":
             enabled = msg.get("enabled", False)

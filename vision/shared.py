@@ -682,6 +682,6 @@ def _get_threat_scorer():
             _threat_scorer = ThreatScorer()
         except Exception as e:
             logger.warning("Shared ThreatScorer init failed: %s", e)
-            _threat_scorer = ThreatScorer() if False else None
+            _threat_scorer = None
         _threat_scorer_initialised = True
     return _threat_scorer

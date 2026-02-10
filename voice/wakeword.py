@@ -1,7 +1,6 @@
 """Wake word: openWakeWord or Porcupine 'Jarvis' / 'Hey Jarvis'."""
 
 import logging
-import os
 import threading
 from collections.abc import Callable
 
@@ -18,14 +17,28 @@ WAKE_MODEL_NAME = "hey_jarvis"
 
 
 def _ensure_wakeword_models() -> None:
-    """Ensure hey_jarvis (and feature models) exist; download if missing (no ONNX workaround)."""
+    """Ensure hey_jarvis (and feature models) exist; download if missing."""
     try:
-        import openwakeword
+        from openwakeword.model import Model
 
-        path = openwakeword.MODELS.get(WAKE_MODEL_NAME, {}).get("model_path", "")
-        if path and not os.path.exists(path):
-            logger.info("Downloading openWakeWord model %s (one-time)...", WAKE_MODEL_NAME)
-            openwakeword.utils.download_models(model_names=["hey_jarvis_v0.1"])
+        # Try loading the model; if it fails, download and retry
+        try:
+            m = Model(inference_framework="tflite", wakeword_models=[WAKE_MODEL_NAME])
+            if m.prediction_buffer:
+                return  # model already available
+        except Exception:
+            pass
+
+        # Model missing — attempt download
+        logger.info("Downloading openWakeWord model %s (one-time)...", WAKE_MODEL_NAME)
+        try:
+            from openwakeword.utils import download_models
+
+            download_models()
+        except Exception as dl_err:
+            logger.warning("openWakeWord model download failed: %s", dl_err)
+    except ImportError:
+        logger.debug("openwakeword not installed")
     except Exception as e:
         logger.debug("openWakeWord ensure models: %s", e)
 
