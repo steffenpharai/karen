@@ -2,7 +2,20 @@
 
 A fully offline AI assistant modelled on **J.A.R.V.I.S.** from the Iron Man films (Paul Bettany's portrayal), running on the **Jetson Orin Nano Super Developer Kit (8GB)** with JetPack 6.x. Uses Bluetooth (e.g. Google Pixel Buds 2) for mic and TTS output, USB webcam for vision, and runs LLM (Ollama/Qwen3), STT (Faster-Whisper), TTS (Piper), and wake word (openWakeWord) locally.
 
-Includes a **SvelteKit PWA** frontend served over the LAN and a **FastAPI WebSocket bridge** so you can chat, view the camera feed, and manage reminders from any device on the network.
+Includes a **SvelteKit PWA** frontend served over the LAN and a **FastAPI WebSocket bridge** so you can chat, view the camera feed, manage reminders, and receive real-time hologram, vitals, and threat data — all from any device on the network.
+
+### Jarvis-Level Vision Features (v2)
+
+The vision system now goes far beyond basic object detection, providing a full Iron Man-style situational awareness suite:
+
+- **Dynamic Open-Vocabulary Prompting** — text prompts in `vision_analyze` (e.g. "tired person, coffee mug") via YOLOE `set_classes()`; defaults to prompt-free mode
+- **Vitals & Health Monitoring** — MediaPipe Face Mesh + Pose for fatigue detection (Eye Aspect Ratio), posture scoring, and best-effort rPPG heart rate estimation from face colour changes
+- **Threat & Anomaly Detection** — ByteTrack object tracking with velocity estimation, unknown-object flagging, and LLM-integrated threat-level scoring (low / medium / high / critical)
+- **3D Scene Reconstruction & Hologram** — DepthAnything V2 Small (TensorRT FP16) for depth estimation, real-time point cloud generation, and Three.js 3D rendering in the PWA (with automatic 2D Canvas fallback when WebGL is unavailable)
+- **Portable / Walk-Around Mode** — `--portable` flag: lower resolution (320×320), 10 FPS, frame-skipping for depth/vitals, thermal throttling, battery-aware scanning
+- **Vision-Enhanced Orchestrator** — enriched LLM context (detections + depth + vitals + threat), `hologram_render` tool for on-demand 3D visualization
+- **Continuous Autonomous Broadcast** — background vision loop pushes hologram, vitals, and threat data to all connected PWA clients via WebSocket every few seconds
+- **Error Resilience** — camera auto-reconnect, OOM recovery (pause vision during LLM inference), low-light detection, WebGL graceful degradation
 
 ## Performance
 
@@ -207,6 +220,38 @@ Output: `models/yoloe26n.engine`. Engine build can take several minutes on devic
 
 **USB camera**: default is index `0` (`/dev/video0`). Set `JARVIS_CAMERA_DEVICE=/dev/video0` to force a device path, or `JARVIS_CAMERA_INDEX=1` for a second camera.
 
+### Depth Engine (DepthAnything V2 Small)
+
+For hologram / 3D scene reconstruction, export the DepthAnything V2 Small TensorRT engine:
+
+```bash
+source venv/bin/activate
+. /etc/profile.d/cuda.sh
+bash scripts/export_depth_engine.sh
+```
+
+Output: `models/depth_anything_v2_small.engine` (FP16). Enable with `JARVIS_DEPTH_ENABLED=1`.
+
+### Enriched Vision Pipeline
+
+When `--serve` or `--orchestrator` is active, the vision system runs a full enriched pipeline every cycle:
+
+```
+Camera Frame
+  ├─ YOLOE-26N (TensorRT) → detections + open-vocab prompting
+  ├─ ByteTrack → multi-object tracking + velocity
+  ├─ MediaPipe Face Mesh → EAR fatigue detection, rPPG heart rate
+  ├─ MediaPipe Pose → posture scoring
+  ├─ DepthAnything V2 Small → depth map + point cloud (optional)
+  └─ ThreatScorer → threat assessment (low/medium/high/critical)
+       ↓
+  Broadcast via WebSocket → PWA (hologram, vitals, threat panels)
+       ↓
+  Injected into LLM context → proactive alerts
+```
+
+All subsystems are optional and degrade gracefully — if a component fails or isn't available, the pipeline skips it and continues with the rest.
+
 ## Running Jarvis
 
 ```bash
@@ -233,6 +278,9 @@ python main.py --orchestrator
 # Full-stack server: FastAPI + WebSocket bridge + PWA + orchestrator
 python main.py --serve
 
+# Portable/walk-around mode (320x320, 10 FPS, thermal-aware)
+python main.py --serve --portable
+
 # Live YOLOE camera preview (OpenCV window)
 python main.py --yolo-visualize
 
@@ -246,12 +294,24 @@ Stop with `Ctrl+C`.
 
 Runs FastAPI (uvicorn) + orchestrator in one process. Exposes:
 
-- **WebSocket** (`/ws`) – bidirectional: send text queries from the PWA, receive status/reply/detections broadcasts
-- **REST API** – `/health`, `/api/status`, `/api/stats`, `/api/reminders`
+- **WebSocket** (`/ws`) – bidirectional: send text queries from the PWA, receive status/reply/detections/vitals/threat/hologram broadcasts
+- **REST API** – `/health`, `/api/status`, `/api/stats`, `/api/reminders`, `/api/hologram`
 - **MJPEG stream** (`/stream`) – live camera + YOLOE overlay
 - **PWA** – SvelteKit frontend served at `/` (build with `npm run build` in `pwa/`)
+- **Continuous vision broadcast** – background task runs the enriched pipeline and pushes hologram, vitals, and threat data to all connected clients every `JARVIS_VISION_BROADCAST_SEC` seconds (default: 5)
 
 Connect from any device on the LAN: `http://<jetson-ip>:8000`.
+
+### Portable mode (`--portable`)
+
+Optimised for walk-around use with battery/thermal constraints:
+
+- Camera resolution reduced to 320×320 at 10 FPS
+- Depth runs every Nth frame (`JARVIS_PORTABLE_DEPTH_SKIP`, default: 3)
+- Vitals run every Nth frame (`JARVIS_PORTABLE_VITALS_SKIP`, default: 5)
+- Thermal throttling pauses non-essential vision at `JARVIS_THERMAL_PAUSE_C` (default: 80°C)
+
+Combine with `--serve` for full PWA access while mobile.
 
 ### Orchestrator (agentic mode)
 
@@ -271,12 +331,13 @@ Tools available to the LLM (via Ollama Hermes-style tool-calling):
 
 | Tool | Description |
 |------|-------------|
-| `vision_analyze` | Re-scan camera with optional focus prompt |
+| `vision_analyze` | Re-scan camera with optional focus prompt (open-vocabulary) |
+| `hologram_render` | Generate 3D hologram of current scene and push to PWA display |
 | `create_reminder` | Save a reminder with optional time |
 | `tell_joke` | Tell a witty one-liner (J.A.R.V.I.S.-style dry wit) |
 | `toggle_sarcasm` | Toggle sarcasm mode |
 
-Time, system stats, scene description, and pending reminders are **injected directly into the user context** — the LLM doesn't need tools for those.
+Time, system stats, scene description (with detections, vitals, and threat level), and pending reminders are **injected directly into the user context** — the LLM doesn't need tools for those.
 
 ## PWA Frontend
 
@@ -292,9 +353,13 @@ cd ..
 The built files in `pwa/build/` are served automatically by `--serve` mode. Components:
 
 - **ChatPanel** – send text queries, view Jarvis replies
-- **VoiceControls** – trigger wake/listen from the browser
-- **CameraStream** – live MJPEG feed with YOLOE overlay
+- **VoiceControls** – trigger wake/listen from the browser, quick-action buttons for hologram & vitals
+- **CameraStream** – live MJPEG feed with YOLOE overlay, detection count badge, threat-level border
+- **HologramView** – real-time 3D point cloud (Three.js) with tracked-object boxes; automatic 2D Canvas fallback when WebGL is unavailable
+- **VitalsPanel** – live fatigue, posture, and heart rate display (WebSocket-driven)
+- **VitalsMini** – compact single-row vitals + threat summary for mobile layout
 - **Dashboard** – Jetson GPU/CPU/thermal stats
+- **StatusBar** – connection status, threat-level badge, fatigue indicator
 - **Reminders** – create and view reminders
 - **SettingsPanel** – sarcasm toggle, connection status
 
@@ -308,7 +373,8 @@ The built files in `pwa/build/` are served automatically by `--serve` mode. Comp
 | `--one-shot [PROMPT]` | Text → LLM → TTS → play (no mic needed) |
 | `--e2e` | Full loop: wake → record → STT → LLM → TTS (with vision) |
 | `--orchestrator` | Agentic loop: wake → STT → LLM with tools + context → TTS |
-| `--serve` | Full-stack: FastAPI + WebSocket + PWA + orchestrator |
+| `--serve` | Full-stack: FastAPI + WebSocket + PWA + orchestrator + vision broadcast |
+| `--portable` | Portable/walk-around mode: 320×320, 10 FPS, thermal throttling |
 | `--yolo-visualize` | Live camera + YOLOE detections in OpenCV window |
 | `--gui` | Show status overlay (Listening / Thinking / Speaking) |
 | `--verbose` | Debug logging |
@@ -318,20 +384,35 @@ The built files in `pwa/build/` are served automatically by `--serve` mode. Comp
 ```
 main.py              Entry point and CLI dispatcher
 orchestrator.py      Async agentic loop (context, tools, proactive vision)
-tools.py             Local tools (vision, status, time, reminders, joke, sarcasm)
+tools.py             Local tools (vision, hologram, status, reminders, joke, sarcasm)
 memory.py            Session summary and persistence
 config/              Settings (Jetson/Ollama tuning) and system prompts
 audio/               Mic selection, recording, playback, Bluetooth hints
 voice/               Wake word, STT (Faster-Whisper), TTS (Piper)
 llm/                 Ollama client (OOM-hardened) and context builder
-vision/              Camera, YOLOE-26N TensorRT, MediaPipe, scene description
-utils/               Power mode, logging, reminders
+vision/
+  shared.py          Process-wide singletons, enriched pipeline orchestration
+  camera.py          USB camera with auto-reconnect and portable mode
+  detector_yolo.py   YOLOE-26N TensorRT (open-vocab prompting via set_classes)
+  scene.py           Natural-language scene description from detections + vitals + threat
+  vitals.py          Fatigue (EAR), posture scoring, rPPG heart rate estimation
+  depth.py           DepthAnything V2 Small TensorRT – depth maps and point clouds
+  tracker.py         ByteTrack-lite multi-object tracking with velocity
+  threat.py          Threat/anomaly scoring (motion, unknown objects, LLM-ready)
+utils/               Power mode (battery, thermal), logging, reminders
 gui/                 Optional Tkinter status overlay with vision preview
-server/              FastAPI app, WebSocket bridge, MJPEG streaming
-pwa/                 SvelteKit PWA frontend (Chat, Camera, Dashboard, Reminders)
-scripts/             Setup and maintenance scripts
-tests/               Unit and E2E tests (pytest)
-models/              TTS voices, YOLOE TensorRT engines
+server/
+  app.py             FastAPI: REST API, MJPEG, vision broadcast loop
+  bridge.py          WebSocket bridge (hologram, vitals, threat broadcasts)
+pwa/                 SvelteKit PWA frontend
+  HologramView       Three.js 3D / 2D Canvas fallback for point clouds
+  VitalsPanel        Real-time fatigue, posture, heart rate
+  VitalsMini         Compact vitals + threat for mobile
+  CameraStream       MJPEG feed with detection badges + threat border
+  StatusBar          Connection, threat level, fatigue indicators
+scripts/             Setup, export, and maintenance scripts
+tests/               Unit (247 tests) and E2E tests (pytest)
+models/              TTS voices, YOLOE + DepthAnything TensorRT engines
 data/                Session summaries and reminders (runtime)
 ```
 
@@ -352,6 +433,16 @@ data/                Session summaries and reminders (runtime)
 | `JARVIS_SERVE_HOST` | `0.0.0.0` | Server bind address |
 | `JARVIS_SERVE_PORT` | `8000` | Server port |
 | `JARVIS_CONTEXT_MAX_TURNS` | `4` | Max history turns in LLM context |
+| `JARVIS_DEPTH_ENABLED` | `0` | Enable DepthAnything depth estimation (`1` to enable) |
+| `JARVIS_PORTABLE` | `0` | Enable portable/walk-around mode (`1` to enable) |
+| `JARVIS_PORTABLE_WIDTH` | `320` | Camera width in portable mode |
+| `JARVIS_PORTABLE_HEIGHT` | `320` | Camera height in portable mode |
+| `JARVIS_PORTABLE_FPS` | `10` | Camera FPS in portable mode |
+| `JARVIS_PORTABLE_DEPTH_SKIP` | `3` | Run depth every Nth frame (portable) |
+| `JARVIS_PORTABLE_VITALS_SKIP` | `5` | Run vitals every Nth frame (portable) |
+| `JARVIS_THERMAL_PAUSE_C` | `80` | Pause non-essential vision above this temp (°C) |
+| `JARVIS_VISION_BROADCAST_SEC` | `5` | Interval (seconds) for continuous vision broadcast |
+| `JARVIS_VISION_DEPTH_EVERY` | `3` | Run depth every Nth broadcast cycle |
 
 ## Troubleshooting
 
@@ -362,6 +453,10 @@ data/                Session summaries and reminders (runtime)
 - **Piper not found**: Ensure `piper-tts` is installed in the venv and the voice model exists at the configured path.
 - **Ollama connection refused**: Start Ollama with `ollama serve` or check `systemctl status ollama`.
 - **No camera**: Plug a USB UVC camera. Use `JARVIS_CAMERA_INDEX` or `JARVIS_CAMERA_DEVICE` to select the device.
+- **Hologram shows "No data"**: Ensure the server is running (`python main.py --serve`) and WebSocket is connected (check StatusBar in PWA). Hologram data is pushed automatically — no manual refresh needed.
+- **WebGL errors in browser**: The PWA automatically falls back to a 2D Canvas renderer when WebGL is unavailable (common on sandboxed/headless browsers). The 3D Three.js view requires a browser with WebGL 2.0 support.
+- **Depth engine not found**: Run `bash scripts/export_depth_engine.sh` to build the TensorRT engine. Enable with `JARVIS_DEPTH_ENABLED=1`. Without it, hologram will show detections but no point cloud.
+- **Thermal throttling (portable mode)**: If the Jetson is overheating, the vision pipeline pauses non-essential subsystems. Lower `JARVIS_PORTABLE_FPS` or improve cooling.
 
 ## Testing
 
@@ -371,13 +466,27 @@ source venv/bin/activate
 # Lint
 ruff check .
 
-# Unit tests
+# Unit tests (247 tests)
 pytest tests/unit/
 
-# E2E tests (requires hardware)
+# E2E tests (requires hardware: camera, CUDA, models)
 pytest tests/e2e/ -m e2e
 
 # Quick smoke test
 python main.py --dry-run
 python main.py --one-shot "Say hello."
 ```
+
+### Test coverage
+
+| Module | Tests |
+|--------|-------|
+| `vision/shared.py` | Scene enrichment, pipeline integration |
+| `vision/vitals.py` | EAR fatigue, posture, rPPG signal accumulation |
+| `vision/tracker.py` | ByteTrack assignment, velocity, ID persistence |
+| `vision/threat.py` | Threat scoring, level thresholds |
+| `vision/depth.py` | Depth map → point cloud conversion |
+| `server/bridge.py` | WebSocket hologram/vitals/threat request handling |
+| `tools.py` | Tool schemas, registry, `hologram_render` |
+| `utils/power.py` | Battery monitoring, thermal warnings |
+| E2E | Vision benchmarks, hologram pipeline, vitals pipeline, portable mode |

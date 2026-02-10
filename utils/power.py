@@ -1,7 +1,9 @@
-"""nvpmodel -q, jetson_clocks, thermal check for Jetson Orin."""
+"""nvpmodel -q, jetson_clocks, thermal check, battery, GPU utilisation for Jetson Orin."""
 
 import logging
+import os
 import subprocess
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +74,136 @@ def get_system_stats() -> str | None:
     except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
         pass
     return "; ".join(parts) if parts else None
+
+
+# ── Battery / power supply status ────────────────────────────────────
+
+
+def get_battery_status() -> dict | None:
+    """Read battery status from sysfs (for portable Jetson setups with UPS/battery).
+
+    Returns dict with keys: present, capacity_pct, status, voltage_uv, current_ua.
+    Returns None if no battery is detected.
+    """
+    power_supply_dir = Path("/sys/class/power_supply")
+    if not power_supply_dir.is_dir():
+        return None
+
+    for supply in power_supply_dir.iterdir():
+        supply_type_file = supply / "type"
+        if not supply_type_file.exists():
+            continue
+        try:
+            stype = supply_type_file.read_text().strip().lower()
+        except Exception:
+            continue
+        if stype != "battery":
+            continue
+
+        result = {"present": True, "name": supply.name}
+        for key, filename in [
+            ("capacity_pct", "capacity"),
+            ("status", "status"),
+            ("voltage_uv", "voltage_now"),
+            ("current_ua", "current_now"),
+        ]:
+            fpath = supply / filename
+            if fpath.exists():
+                try:
+                    val = fpath.read_text().strip()
+                    result[key] = int(val) if val.isdigit() else val
+                except Exception:
+                    pass
+        return result
+
+    return None
+
+
+# ── GPU utilisation ──────────────────────────────────────────────────
+
+
+def get_gpu_utilization() -> float | None:
+    """Read GPU utilisation percentage from Jetson sysfs.
+
+    Returns 0-100 float, or None if unavailable.
+    """
+    # Jetson Orin GPU load sysfs path
+    gpu_load_paths = [
+        "/sys/devices/gpu.0/load",
+        "/sys/devices/platform/gpu.0/load",
+        "/sys/devices/17000000.ga10b/load",
+    ]
+    for path in gpu_load_paths:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    val = f.read().strip()
+                # Value is typically 0-1000 (permille) on Jetson
+                return float(val) / 10.0
+            except Exception:
+                pass
+
+    # Fallback: try tegrastats parsing
+    try:
+        out = subprocess.run(
+            ["tegrastats", "--interval", "1000"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode == 0 and "GR3D" in out.stdout:
+            # Parse "GR3D_FREQ 42%" pattern
+            for part in out.stdout.split():
+                if "%" in part and part.replace("%", "").isdigit():
+                    return float(part.replace("%", ""))
+    except Exception:
+        pass
+    return None
+
+
+# ── Thermal reading ──────────────────────────────────────────────────
+
+
+def get_thermal_temperature() -> float | None:
+    """Read highest thermal zone temperature in Celsius. Returns None if unavailable."""
+    thermal_dir = Path("/sys/class/thermal")
+    if not thermal_dir.is_dir():
+        return None
+    max_temp = None
+    for zone in thermal_dir.iterdir():
+        temp_file = zone / "temp"
+        if temp_file.exists():
+            try:
+                val = int(temp_file.read_text().strip())
+                # Value is in millidegrees on most kernels
+                temp_c = val / 1000.0 if val > 1000 else float(val)
+                if max_temp is None or temp_c > max_temp:
+                    max_temp = temp_c
+            except Exception:
+                pass
+    return max_temp
+
+
+def should_throttle_vision() -> bool:
+    """Check if vision should be throttled due to thermal or power constraints.
+
+    Returns True if temperature exceeds THERMAL_PAUSE_THRESHOLD or
+    battery is critically low (<10%).
+    """
+    from config import settings
+
+    threshold = getattr(settings, "THERMAL_PAUSE_THRESHOLD", 80.0)
+
+    # Thermal check
+    temp = get_thermal_temperature()
+    if temp is not None and temp > threshold:
+        logger.warning("Thermal throttle: %.1f°C > %.1f°C threshold", temp, threshold)
+        return True
+
+    # Battery check
+    battery = get_battery_status()
+    if battery and battery.get("capacity_pct") is not None:
+        cap = battery["capacity_pct"]
+        if isinstance(cap, (int, float)) and cap < 10:
+            logger.warning("Battery critical: %s%%", cap)
+            return True
+
+    return False

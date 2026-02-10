@@ -13,12 +13,66 @@ logger = logging.getLogger(__name__)
 def vision_analyze(prompt: str | None = None) -> str:
     """Run vision on current camera frame; optional prompt to focus (e.g. person, cup).
 
-    Delegates entirely to ``vision.shared.describe_current_scene`` which uses
-    the process-wide camera, YOLOE engine, and MediaPipe face-detector singletons.
+    Uses the enriched pipeline (YOLOE + tracking + depth + vitals + threat)
+    when available, falling back to the basic pipeline.
     """
-    from vision.shared import describe_current_scene
+    try:
+        from vision.shared import describe_current_scene_enriched
 
-    return describe_current_scene(prompt)
+        data = describe_current_scene_enriched(prompt)
+        return data.get("description", "Vision temporarily unavailable.")
+    except Exception:
+        from vision.shared import describe_current_scene
+
+        return describe_current_scene(prompt)
+
+
+def vision_analyze_full(prompt: str | None = None) -> dict:
+    """Run full enriched vision pipeline, returning all data (for internal use).
+
+    Returns dict with: description, vitals_text, threat_text, detections,
+    tracked, point_cloud, vitals, threat.
+    """
+    try:
+        from vision.shared import describe_current_scene_enriched
+
+        return describe_current_scene_enriched(prompt)
+    except Exception as e:
+        logger.warning("vision_analyze_full failed: %s", e)
+        return {"description": "Vision temporarily unavailable.", "vitals_text": "", "threat_text": ""}
+
+
+def hologram_render(prompt: str | None = None) -> str:
+    """Generate 3D hologram data and broadcast to PWA via WebSocket.
+
+    Captures point cloud + tracked objects + depth and pushes to all
+    connected PWA clients for Three.js rendering.
+    """
+    try:
+        data = vision_analyze_full(prompt)
+        point_cloud = data.get("point_cloud", [])
+        tracked = data.get("tracked", [])
+
+        if not point_cloud:
+            return "No depth data available for hologram rendering, sir. The depth engine may not be active."
+
+        # Broadcast via bridge if server is running
+        try:
+            from server.bridge import bridge
+
+            hologram_payload = {
+                "point_cloud": point_cloud[:3000],  # cap for WebSocket bandwidth
+                "tracked_objects": tracked,
+                "description": data.get("description", ""),
+            }
+            bridge.broadcast_threadsafe({"type": "hologram", "data": hologram_payload})
+        except Exception as e:
+            logger.debug("Hologram broadcast failed (server may not be running): %s", e)
+
+        return f"Hologram rendered: {len(point_cloud)} points, {len(tracked)} tracked objects. Data sent to display, sir."
+    except Exception as e:
+        logger.warning("hologram_render failed: %s", e)
+        return "I'm afraid the hologram system encountered an error, sir."
 
 
 def get_jetson_status() -> str:
@@ -98,11 +152,24 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "vision_analyze",
-            "description": "Re-scan camera with optional focus prompt.",
+            "description": "Re-scan camera with optional focus prompt (comma-separated classes).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string", "description": "Focus: person, cup, etc."},
+                    "prompt": {"type": "string", "description": "Focus: person, cup, tired person, etc."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hologram_render",
+            "description": "Generate 3D hologram of current scene and push to display.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Optional focus for hologram."},
                 },
             },
         },
@@ -148,6 +215,8 @@ TOOL_SCHEMAS = [
 
 TOOL_REGISTRY = {
     "vision_analyze": vision_analyze,
+    "vision_analyze_full": vision_analyze_full,
+    "hologram_render": hologram_render,
     "get_jetson_status": get_jetson_status,
     "get_current_time": get_current_time,
     "create_reminder": create_reminder,
@@ -168,6 +237,10 @@ def run_tool(name: str, arguments: dict) -> str:
             arguments = {**arguments, "time_str": arguments.get("time", "")}
         # Only pass known params to each tool
         if name == "vision_analyze":
+            args = {"prompt": arguments.get("prompt")}
+        elif name == "vision_analyze_full":
+            args = {"prompt": arguments.get("prompt")}
+        elif name == "hologram_render":
             args = {"prompt": arguments.get("prompt")}
         elif name == "create_reminder":
             args = {"text": arguments.get("text", ""), "time_str": arguments.get("time_str", arguments.get("time", ""))}

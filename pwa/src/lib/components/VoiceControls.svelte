@@ -3,7 +3,7 @@
   Keyboard: Tab to mic, Enter to send.
 -->
 <script lang="ts">
-	import { sendText, sendScan, sendGetStatus, sendSarcasmToggle } from '$lib/stores/connection';
+	import { sendText, sendScan, sendGetStatus, sendSarcasmToggle, sendHologramRequest, sendVitalsRequest } from '$lib/stores/connection';
 	import {
 		isListening,
 		speechSupported,
@@ -74,6 +74,26 @@
 			aria-label="Get system status"
 		>
 			Status
+		</button>
+		<button
+			onclick={sendHologramRequest}
+			class="px-3 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider
+				bg-[var(--color-jarvis-card)] border border-[var(--color-jarvis-border)]
+				text-[var(--color-jarvis-magenta)] hover:border-[var(--color-jarvis-magenta)]/40
+				transition-colors"
+			aria-label="Request 3D hologram"
+		>
+			Holo
+		</button>
+		<button
+			onclick={sendVitalsRequest}
+			class="px-3 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider
+				bg-[var(--color-jarvis-card)] border border-[var(--color-jarvis-border)]
+				text-[var(--color-jarvis-green)] hover:border-[var(--color-jarvis-green)]/40
+				transition-colors"
+			aria-label="Request vitals update"
+		>
+			Vitals
 		</button>
 		<button
 			onclick={toggleSarcasm}

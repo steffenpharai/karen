@@ -100,9 +100,62 @@ async def test_send_helpers(bridge_instance):
     await bridge_instance.send_error("oops")
     await bridge_instance.send_wake()
     await bridge_instance.send_proactive("Take a break")
-    assert len(ws.sent) == 7
+    await bridge_instance.send_hologram({"point_cloud": [], "tracked_objects": []})
+    await bridge_instance.send_vitals({"fatigue": "alert", "posture": "good"})
+    await bridge_instance.send_threat({"level": "clear", "score": 0.0, "summary": ""})
+    assert len(ws.sent) == 10
     types = [m["type"] for m in ws.sent]
     assert types == [
         "status", "reply", "transcript_final",
         "detections", "error", "wake", "proactive",
+        "hologram", "vitals", "threat",
     ]
+
+
+@pytest.mark.asyncio
+async def test_handle_hologram_request(bridge_instance):
+    """hologram_request WS message triggers hologram broadcast."""
+    from unittest.mock import MagicMock, patch
+
+    ws = FakeWebSocket()
+    bridge_instance.add_client(ws)
+
+    mock_data = {
+        "point_cloud": [{"x": 1, "y": 2, "z": 3, "r": 255, "g": 0, "b": 0}],
+        "tracked": [{"track_id": 1, "xyxy": [0, 0, 100, 100], "cls": 0, "class_name": "person"}],
+        "description": "test scene",
+    }
+    with patch("server.bridge.asyncio.get_running_loop") as mock_loop:
+        mock_executor = asyncio.Future()
+        mock_executor.set_result(mock_data)
+        mock_loop.return_value.run_in_executor = MagicMock(return_value=mock_executor)
+
+        msg = json.dumps({"type": "hologram_request"})
+        await bridge_instance.handle_client_message(msg)
+
+    # Should have broadcast a hologram message
+    holo_msgs = [m for m in ws.sent if m.get("type") == "hologram"]
+    assert len(holo_msgs) == 1
+    assert holo_msgs[0]["data"]["description"] == "test scene"
+
+
+@pytest.mark.asyncio
+async def test_handle_vitals_request(bridge_instance):
+    """vitals_request WS message triggers vitals broadcast."""
+    from unittest.mock import MagicMock, patch
+
+    ws = FakeWebSocket()
+    bridge_instance.add_client(ws)
+
+    # Simulate no analyzer available
+    with patch("server.bridge.asyncio.get_running_loop") as mock_loop:
+        mock_executor = asyncio.Future()
+        mock_executor.set_result(None)
+        mock_loop.return_value.run_in_executor = MagicMock(return_value=mock_executor)
+
+        msg = json.dumps({"type": "vitals_request"})
+        await bridge_instance.handle_client_message(msg)
+
+    vitals_msgs = [m for m in ws.sent if m.get("type") == "vitals"]
+    assert len(vitals_msgs) == 1
+    assert vitals_msgs[0]["data"]["fatigue"] == "unknown"

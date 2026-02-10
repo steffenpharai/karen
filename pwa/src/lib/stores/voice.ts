@@ -13,6 +13,11 @@ import { sendText } from './connection';
 
 type VoiceMode = 'push-to-talk' | 'always-on';
 
+// Web Speech API types (not always in default TS lib)
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type SpeechRecognitionAny = any;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 // ── Stores ───────────────────────────────────────────────────────────
 
 /** Whether the mic is currently active/recording */
@@ -29,12 +34,14 @@ export const speechSupported = writable<boolean>(false);
 
 // ── SpeechRecognition ────────────────────────────────────────────────
 
-let recognition: SpeechRecognition | null = null;
+let recognition: SpeechRecognitionAny | null = null;
 let isRunning = false;
 
-function getSpeechRecognition(): SpeechRecognition | null {
+function getSpeechRecognition(): SpeechRecognitionAny | null {
 	if (typeof window === 'undefined') return null;
-	const SR = window.SpeechRecognition || (window as unknown as { webkitSpeechRecognition: typeof SpeechRecognition }).webkitSpeechRecognition;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const w = window as any;
+	const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
 	if (!SR) return null;
 	return new SR();
 }
@@ -51,7 +58,8 @@ export function initSpeechRecognition() {
 	recognition.interimResults = true;
 	recognition.lang = 'en-GB';
 
-	recognition.onresult = (event: SpeechRecognitionEvent) => {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	recognition.onresult = (event: any) => {
 		let interim = '';
 		let final = '';
 
@@ -77,7 +85,8 @@ export function initSpeechRecognition() {
 		}
 	};
 
-	recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	recognition.onerror = (event: any) => {
 		if (event.error === 'no-speech' || event.error === 'aborted') {
 			// Normal in push-to-talk
 			return;

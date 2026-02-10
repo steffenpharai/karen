@@ -29,7 +29,7 @@
 </script>
 
 {#if visible}
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_noninteractive_tabindex -->
 	<div
 		onclick={dismiss}
 		onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'Enter') dismiss(); }}

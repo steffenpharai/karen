@@ -66,6 +66,11 @@ def parse_args():
         action="store_true",
         help="Run FastAPI server + orchestrator: exposes WebSocket bridge, REST API, and MJPEG stream for the PWA.",
     )
+    parser.add_argument(
+        "--portable",
+        action="store_true",
+        help="Portable/walk-around mode: lower res (320x320), 10 FPS, frame skipping for battery/thermal.",
+    )
     return parser.parse_args()
 
 
@@ -422,6 +427,19 @@ def _handle_serve():
 def main() -> int:
     args = parse_args()
     setup_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    # Portable mode: override camera settings for low-power walk-around
+    if args.portable:
+        settings.PORTABLE_MODE = True
+        settings.CAMERA_WIDTH = settings.PORTABLE_WIDTH
+        settings.CAMERA_HEIGHT = settings.PORTABLE_HEIGHT
+        settings.CAMERA_FPS = settings.PORTABLE_FPS
+        logger.info(
+            "Portable mode: %dx%d @ %d FPS, depth skip=%d, vitals skip=%d",
+            settings.PORTABLE_WIDTH, settings.PORTABLE_HEIGHT,
+            settings.PORTABLE_FPS, settings.PORTABLE_DEPTH_SKIP,
+            settings.PORTABLE_VITALS_SKIP,
+        )
 
     if args.dry_run:
         logger.info(

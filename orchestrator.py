@@ -63,6 +63,10 @@ _TOOL_INTENT_PATTERNS: dict[str, _re.Pattern] = {
         r'\b(re-?scan|scan again|look again|check again|another look|refresh.*(camera|view))\b',
         _re.IGNORECASE,
     ),
+    "hologram_render": _re.compile(
+        r'\b(hologram|3d|three.?d|render|point cloud|depth map|spatial)\b',
+        _re.IGNORECASE,
+    ),
 }
 
 
@@ -143,6 +147,8 @@ def _run_one_turn_sync(
     memory: dict,
     short_term: list,
     vision_description: str | None,
+    vitals_text: str | None = None,
+    threat_text: str | None = None,
 ) -> str:
     """Build messages, ReAct loop with tools, return final answer.
 
@@ -172,6 +178,8 @@ def _run_one_turn_sync(
         reminders_text=rem_text,
         current_time=current_time,
         system_stats=sys_stats,
+        vitals_text=vitals_text,
+        threat_text=threat_text,
         max_turns=settings.CONTEXT_MAX_TURNS,
     )
 
@@ -212,11 +220,14 @@ async def _run_one_turn(
     memory: dict,
     short_term: list,
     vision_description: str | None,
+    vitals_text: str | None = None,
+    threat_text: str | None = None,
 ) -> str:
     """Async wrapper: runs the blocking LLM ReAct loop in an executor thread."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        None, _run_one_turn_sync, query, memory, short_term, vision_description,
+        None, _run_one_turn_sync, query, memory, short_term,
+        vision_description, vitals_text, threat_text,
     )
 
 
@@ -273,6 +284,8 @@ async def run_orchestrator(
     status_cb("Listening")
     idle_since = time.monotonic()
     vision_description: str | None = None
+    vitals_text: str | None = None
+    threat_text: str | None = None
 
     try:
         while True:
@@ -281,20 +294,56 @@ async def run_orchestrator(
             try:
                 query = await asyncio.wait_for(query_queue.get(), timeout=timeout_sec)
             except asyncio.TimeoutError:
-                # Proactive: every PROACTIVE_IDLE_SEC run vision and optionally suggest break
+                # Proactive: every PROACTIVE_IDLE_SEC run enriched vision check
                 if (time.monotonic() - idle_since) >= settings.PROACTIVE_IDLE_SEC:
-                    obs = await loop.run_in_executor(
-                        None, run_tool, "vision_analyze", {"prompt": "person"},
-                    )
-                    if "person" in obs and "detected" in obs.lower():
-                        say_text = "Sir, you've been at your desk for quite some time. Might I suggest a brief respite? Even Mr. Stark took the occasional break."
-                        wav = await loop.run_in_executor(
-                            None, synthesize, say_text, settings.TTS_VOICE,
+                    try:
+                        from tools import vision_analyze_full
+
+                        vision_data = await loop.run_in_executor(
+                            None, vision_analyze_full, None,
                         )
-                        if wav:
-                            await loop.run_in_executor(None, play_wav, wav)
-                        if bridge is not None:
-                            await bridge.send_proactive(say_text)
+                        proactive_desc = vision_data.get("description", "")
+                        proactive_vitals = vision_data.get("vitals")
+                        proactive_threat = vision_data.get("threat")
+
+                        # Proactive vitals alert
+                        say_text = None
+                        if proactive_vitals and getattr(proactive_vitals, "fatigue_level", "unknown") in ("moderate", "severe"):
+                            say_text = "Sir, you appear quite fatigued. Might I suggest a brief respite. Even Mr. Stark took the occasional break."
+                        elif proactive_vitals and getattr(proactive_vitals, "posture_label", "unknown") == "poor":
+                            say_text = "Sir, your posture could use some attention. Perhaps a stretch is in order."
+                        elif "person" in proactive_desc.lower():
+                            say_text = "Sir, you've been at your desk for quite some time. Might I suggest a brief respite?"
+
+                        # Proactive threat alert
+                        if proactive_threat and getattr(proactive_threat, "level", 0) >= 5:
+                            rec = getattr(proactive_threat, "recommendation", "")
+                            say_text = f"Sir, I'm detecting elevated threat conditions. {rec}"
+
+                        if say_text:
+                            wav = await loop.run_in_executor(
+                                None, synthesize, say_text, settings.TTS_VOICE,
+                            )
+                            if wav:
+                                await loop.run_in_executor(None, play_wav, wav)
+                            if bridge is not None:
+                                await bridge.send_proactive(say_text)
+
+                        # Broadcast vitals/threat to PWA
+                        if bridge is not None and proactive_vitals:
+                            await bridge.broadcast({
+                                "type": "vitals",
+                                "data": {
+                                    "fatigue": getattr(proactive_vitals, "fatigue_level", "unknown"),
+                                    "posture": getattr(proactive_vitals, "posture_label", "unknown"),
+                                    "heart_rate": getattr(proactive_vitals, "heart_rate_bpm", None),
+                                    "hr_confidence": getattr(proactive_vitals, "heart_rate_confidence", 0),
+                                    "alerts": getattr(proactive_vitals, "alerts", []),
+                                },
+                            })
+                    except Exception as e:
+                        logger.debug("Proactive vision check failed: %s", e)
+
                     idle_since = time.monotonic()
                 continue
 
@@ -320,9 +369,21 @@ async def run_orchestrator(
 
             # Only run vision if the query is vision-related (saves ~1 s)
             if _VISION_KEYWORDS.search(query_text):
-                vision_description = await loop.run_in_executor(
-                    None, run_tool, "vision_analyze", {},
-                )
+                try:
+                    from tools import vision_analyze_full
+
+                    vision_data = await loop.run_in_executor(
+                        None, vision_analyze_full, None,
+                    )
+                    vision_description = vision_data.get("description")
+                    vitals_text = vision_data.get("vitals_text")
+                    threat_text = vision_data.get("threat_text")
+                except Exception:
+                    vision_description = await loop.run_in_executor(
+                        None, run_tool, "vision_analyze", {},
+                    )
+                    vitals_text = None
+                    threat_text = None
             # else: reuse previous vision_description (or None)
 
             status_cb("Thinking (LLM)")
@@ -333,6 +394,8 @@ async def run_orchestrator(
                         memory,
                         short_term,
                         vision_description,
+                        vitals_text=vitals_text,
+                        threat_text=threat_text,
                     )
                     break
                 except Exception as e:

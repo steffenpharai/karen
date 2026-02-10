@@ -52,6 +52,39 @@ export const wsSystemStats = writable<string | null>(null);
 /** Server-side interim transcript (STT partial from Jetson) */
 export const serverInterimTranscript = writable<string>('');
 
+/** Hologram data (point cloud + tracked objects) */
+export interface HologramData {
+	point_cloud: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }>;
+	tracked_objects: Array<{
+		track_id: number;
+		xyxy: number[];
+		cls: number;
+		class_name: string;
+		velocity: number[];
+		depth: number | null;
+	}>;
+	description: string;
+}
+export const hologramData = writable<HologramData | null>(null);
+
+/** Vitals data */
+export interface VitalsData {
+	fatigue: string;
+	posture: string;
+	heart_rate: number | null;
+	hr_confidence: number;
+	alerts: string[];
+}
+export const vitalsData = writable<VitalsData | null>(null);
+
+/** Threat assessment data (pushed by enriched vision pipeline) */
+export interface ThreatData {
+	level: string;       // 'clear' | 'low' | 'moderate' | 'high' | 'critical'
+	score: number;       // 0-1
+	summary: string;
+}
+export const threatData = writable<ThreatData | null>(null);
+
 // ── WebSocket Manager ────────────────────────────────────────────────
 
 let ws: WebSocket | null = null;
@@ -146,6 +179,10 @@ function handleMessage(event: MessageEvent) {
 					detections: (msg.detections as unknown[]) || [],
 					description: (msg.description as string) || ''
 				});
+				// If threat data is bundled with scan result, update it
+				if (msg.threat) {
+					threatData.set(msg.threat as ThreatData);
+				}
 				break;
 
 			case 'proactive':
@@ -158,6 +195,18 @@ function handleMessage(event: MessageEvent) {
 
 			case 'system_status':
 				wsSystemStats.set((msg.status as string) || null);
+				break;
+
+			case 'hologram':
+				hologramData.set((msg.data as HologramData) || null);
+				break;
+
+			case 'vitals':
+				vitalsData.set((msg.data as VitalsData) || null);
+				break;
+
+			case 'threat':
+				threatData.set((msg.data as ThreatData) || null);
 				break;
 
 			case 'error':
@@ -268,6 +317,16 @@ export function sendGetStatus() {
 /** Convenience: toggle sarcasm */
 export function sendSarcasmToggle(enabled: boolean) {
 	sendMessage({ type: 'sarcasm_toggle', enabled });
+}
+
+/** Convenience: request hologram render */
+export function sendHologramRequest() {
+	sendMessage({ type: 'hologram_request' });
+}
+
+/** Convenience: request vitals update */
+export function sendVitalsRequest() {
+	sendMessage({ type: 'vitals_request' });
 }
 
 // ── Chat history localStorage persistence ────────────────────────────

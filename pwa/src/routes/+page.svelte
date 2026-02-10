@@ -22,6 +22,9 @@
 	import Dashboard from '$lib/components/Dashboard.svelte';
 	import Reminders from '$lib/components/Reminders.svelte';
 	import Toast from '$lib/components/Toast.svelte';
+	import HologramView from '$lib/components/HologramView.svelte';
+	import VitalsPanel from '$lib/components/VitalsPanel.svelte';
+	import VitalsMini from '$lib/components/VitalsMini.svelte';
 
 	let isFolded = $state(true);
 	let isMidSize = $state(false);
@@ -91,6 +94,9 @@
 				<ListeningOrb />
 			</div>
 
+			<!-- Vitals + Threat mini bar -->
+			<VitalsMini />
+
 			<!-- Chat (scrollable, takes remaining space) -->
 			<div class="flex-1 min-h-0">
 				<ChatPanel />
@@ -113,10 +119,13 @@
 				<VoiceControls />
 			</div>
 
-			<!-- Right pane: camera only (compact) -->
+			<!-- Right pane: camera + vitals + hologram (compact) -->
 			<div class="flex flex-col min-h-0 overflow-y-auto p-3 gap-3">
 				<CameraStream />
+				<VitalsPanel />
+				<HologramView />
 				<Dashboard />
+				<Reminders />
 			</div>
 		</div>
 	{:else}
@@ -134,13 +143,15 @@
 				<VoiceControls />
 			</div>
 
-			<!-- Right pane: camera + dashboard + reminders (~60%) -->
+			<!-- Right pane: camera + hologram + dashboard + vitals + reminders (~60%) -->
 			<div class="flex flex-col min-h-0 overflow-y-auto p-4 gap-4">
 				<CameraStream />
+				<HologramView />
 				<div class="grid grid-cols-2 gap-4">
 					<Dashboard />
-					<Reminders />
+					<VitalsPanel />
 				</div>
+				<Reminders />
 			</div>
 		</div>
 	{/if}

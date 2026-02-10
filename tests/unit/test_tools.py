@@ -86,11 +86,11 @@ def test_run_tool_unknown():
 
 @pytest.mark.unit
 def test_tool_schemas_and_registry():
-    # TOOL_SCHEMAS has 4 tools (vision_analyze, create_reminder, tell_joke, toggle_sarcasm)
-    # TOOL_REGISTRY has 7 (includes get_current_time, get_jetson_status, list_reminders
+    # TOOL_SCHEMAS has 5 tools (vision_analyze, hologram_render, create_reminder, tell_joke, toggle_sarcasm)
+    # TOOL_REGISTRY has 9 (includes vision_analyze_full, get_current_time, get_jetson_status, list_reminders
     # which are NOT in schemas because their data is already injected into context).
-    assert len(TOOL_SCHEMAS) == 4
-    assert len(TOOL_REGISTRY) == 7
+    assert len(TOOL_SCHEMAS) == 5
+    assert len(TOOL_REGISTRY) == 9
     for s in TOOL_SCHEMAS:
         name = s.get("function", {}).get("name")
         assert name in TOOL_REGISTRY
@@ -98,10 +98,10 @@ def test_tool_schemas_and_registry():
 
 @pytest.mark.unit
 def test_vision_analyze_delegates_to_shared(monkeypatch):
-    """vision_analyze should delegate to vision.shared.describe_current_scene."""
+    """vision_analyze should delegate to vision.shared.describe_current_scene_enriched (with fallback)."""
     from unittest.mock import patch
 
-    with patch("vision.shared.describe_current_scene", return_value="Objects: person(1). Face count: 1.") as mock_desc:
+    with patch("vision.shared.describe_current_scene_enriched", return_value={"description": "Objects: person(1). Face count: 1."}) as mock_desc:
         out = run_tool("vision_analyze", {"prompt": "person"})
         mock_desc.assert_called_once_with("person")
         assert "person" in out

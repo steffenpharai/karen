@@ -85,12 +85,30 @@ def yolo_engine_exists() -> bool:
     return os.path.isfile(YOLOE_ENGINE_PATH)
 
 
+# ── Depth estimation (DepthAnything V2 Small) ────────────────────────
+DEPTH_ENGINE_PATH = os.path.join(PROJECT_ROOT, "models", "depth_anything_v2_small.engine")
+DEPTH_ENABLED = os.environ.get("JARVIS_DEPTH_ENABLED", "0") == "1"
+
+# ── Portable / walk-around mode ──────────────────────────────────────
+PORTABLE_MODE = os.environ.get("JARVIS_PORTABLE", "0") == "1"
+PORTABLE_WIDTH = int(os.environ.get("JARVIS_PORTABLE_WIDTH", "320"))
+PORTABLE_HEIGHT = int(os.environ.get("JARVIS_PORTABLE_HEIGHT", "320"))
+PORTABLE_FPS = int(os.environ.get("JARVIS_PORTABLE_FPS", "10"))
+PORTABLE_DEPTH_SKIP = int(os.environ.get("JARVIS_PORTABLE_DEPTH_SKIP", "3"))   # run depth every Nth frame
+PORTABLE_VITALS_SKIP = int(os.environ.get("JARVIS_PORTABLE_VITALS_SKIP", "5"))  # run vitals every Nth frame
+# Thermal threshold (Celsius) — pause non-essential vision when exceeded
+THERMAL_PAUSE_THRESHOLD = float(os.environ.get("JARVIS_THERMAL_PAUSE_C", "80"))
+
 # Orchestrator – context, memory, proactive
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 SUMMARY_PATH = os.path.join(DATA_DIR, "session_summary.json")
 CONTEXT_MAX_TURNS = int(os.environ.get("JARVIS_CONTEXT_MAX_TURNS", "4"))
 SUMMARY_EVERY_N_TURNS = int(os.environ.get("JARVIS_SUMMARY_EVERY_N", "6"))
 PROACTIVE_IDLE_SEC = int(os.environ.get("JARVIS_PROACTIVE_IDLE_SEC", "300"))
+# Continuous vision broadcast interval (seconds) for PWA hologram/vitals/threat
+VISION_BROADCAST_INTERVAL = int(os.environ.get("JARVIS_VISION_BROADCAST_SEC", "5"))
+# How often (in multiples of VISION_BROADCAST_INTERVAL) to run depth/point cloud
+VISION_BROADCAST_DEPTH_EVERY = int(os.environ.get("JARVIS_VISION_DEPTH_EVERY", "3"))
 MAX_TOOL_CALLS_PER_TURN = int(os.environ.get("JARVIS_MAX_TOOL_CALLS", "3"))
 
 # Optional GUI vision preview (Phase 5)

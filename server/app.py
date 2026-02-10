@@ -26,17 +26,120 @@ _PWA_DIR = Path(settings.PROJECT_ROOT) / "pwa" / "build"
 
 # ── Lifespan ──────────────────────────────────────────────────────────────
 
+_vision_broadcast_task: asyncio.Task | None = None
+
+
+async def _vision_broadcast_loop() -> None:
+    """Background task: continuously run enriched vision and broadcast to PWA clients.
+
+    Sends tracked objects, vitals, threat every VISION_BROADCAST_INTERVAL seconds.
+    Sends full hologram (point cloud) every VISION_BROADCAST_DEPTH_EVERY cycles.
+    Only runs when at least one WebSocket client is connected.
+    """
+    interval = getattr(settings, "VISION_BROADCAST_INTERVAL", 5)
+    depth_every = getattr(settings, "VISION_BROADCAST_DEPTH_EVERY", 3)
+    cycle = 0
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+
+            # Skip if no clients connected
+            with bridge._clients_lock:
+                n_clients = len(bridge._clients)
+            if n_clients == 0:
+                continue
+
+            loop = asyncio.get_running_loop()
+
+            # Run vision pipeline in executor (blocking I/O)
+            try:
+                from tools import vision_analyze_full
+
+                data = await loop.run_in_executor(None, vision_analyze_full, None)
+            except Exception as exc:
+                logger.debug("Vision broadcast: pipeline error: %s", exc)
+                continue
+
+            # Always broadcast detections + tracked objects
+            tracked = data.get("tracked", [])
+            description = data.get("description", "")
+            await bridge.broadcast({
+                "type": "scan_result",
+                "detections": data.get("detections", []),
+                "description": description,
+            })
+
+            # Always broadcast vitals if available
+            vitals = data.get("vitals")
+            if vitals is not None:
+                await bridge.broadcast({
+                    "type": "vitals",
+                    "data": {
+                        "fatigue": getattr(vitals, "fatigue_level", "unknown"),
+                        "posture": getattr(vitals, "posture_label", "unknown"),
+                        "heart_rate": getattr(vitals, "heart_rate_bpm", None),
+                        "hr_confidence": getattr(vitals, "heart_rate_confidence", 0),
+                        "alerts": getattr(vitals, "alerts", []),
+                    },
+                })
+
+            # Always broadcast threat if available
+            threat = data.get("threat")
+            if threat is not None:
+                await bridge.broadcast({
+                    "type": "threat",
+                    "data": {
+                        "level": getattr(threat, "label", "clear"),
+                        "score": getattr(threat, "level", 0) / 10.0,
+                        "summary": getattr(threat, "recommendation", ""),
+                    },
+                })
+
+            # Broadcast hologram (point cloud) every Nth cycle
+            if cycle % depth_every == 0:
+                point_cloud = data.get("point_cloud", [])
+                await bridge.broadcast({
+                    "type": "hologram",
+                    "data": {
+                        "point_cloud": point_cloud[:3000],
+                        "tracked_objects": tracked,
+                        "description": description,
+                    },
+                })
+
+            cycle += 1
+
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.debug("Vision broadcast loop error: %s", exc)
+            await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Set event loop on the bridge so threadsafe broadcasts work.
 
+    Starts the continuous vision broadcast background task.
     On shutdown, release the shared camera so V4L2 doesn't leak the device.
     """
+    global _vision_broadcast_task
     loop = asyncio.get_running_loop()
     bridge.set_loop(loop)
+    _vision_broadcast_task = asyncio.create_task(_vision_broadcast_loop())
     logger.info("Jarvis server started on %s:%s", settings.JARVIS_SERVE_HOST, settings.JARVIS_SERVE_PORT)
+    logger.info("Vision broadcast: every %ds, depth every %d cycles",
+                getattr(settings, "VISION_BROADCAST_INTERVAL", 5),
+                getattr(settings, "VISION_BROADCAST_DEPTH_EVERY", 3))
     yield
     logger.info("Jarvis server shutting down")
+    if _vision_broadcast_task:
+        _vision_broadcast_task.cancel()
+        try:
+            await _vision_broadcast_task
+        except asyncio.CancelledError:
+            pass
     try:
         from vision.shared import release_camera
         release_camera()
@@ -142,6 +245,95 @@ async def api_delete_reminder(index: int):
         return {"ok": True, "removed": removed}
     except IndexError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
+
+
+# ── Depth map endpoint ────────────────────────────────────────────────────
+
+@app.get("/api/depth")
+async def api_depth():
+    """Return the latest depth map as a 16-bit PNG (or JSON metadata if unavailable)."""
+    try:
+        from vision.shared import read_frame, run_depth_shared
+
+        frame = await asyncio.get_running_loop().run_in_executor(None, read_frame)
+        if frame is None:
+            return JSONResponse({"error": "No frame available"}, status_code=503)
+
+        depth_map = await asyncio.get_running_loop().run_in_executor(None, run_depth_shared, frame)
+        if depth_map is None:
+            return JSONResponse({"error": "Depth estimation unavailable (engine not loaded)"}, status_code=503)
+
+        import cv2
+        import numpy as np
+
+        # Convert 0-1 float32 to 16-bit PNG
+        depth_16 = (depth_map * 65535).astype(np.uint16)
+        ok, buf = cv2.imencode(".png", depth_16)
+        if not ok:
+            return JSONResponse({"error": "Encoding failed"}, status_code=500)
+        from fastapi.responses import Response
+        return Response(content=buf.tobytes(), media_type="image/png")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Vitals endpoint ──────────────────────────────────────────────────────
+
+@app.get("/api/vitals")
+async def api_vitals():
+    """Return latest vitals snapshot as JSON."""
+    try:
+        from vision.shared import get_vitals_analyzer
+
+        analyzer = get_vitals_analyzer()
+        if analyzer is None:
+            return {"vitals": None, "message": "Vitals analyzer not initialized"}
+
+        result = analyzer.last_result
+        return {
+            "vitals": {
+                "fatigue_level": result.fatigue_level,
+                "eye_aspect_ratio": result.eye_aspect_ratio,
+                "blink_rate_per_min": result.blink_rate_per_min,
+                "posture_score": result.posture_score,
+                "posture_label": result.posture_label,
+                "heart_rate_bpm": result.heart_rate_bpm,
+                "heart_rate_confidence": result.heart_rate_confidence,
+                "alerts": result.alerts,
+            }
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Hologram endpoint ────────────────────────────────────────────────────
+
+@app.get("/api/hologram")
+async def api_hologram():
+    """Trigger hologram generation and return point cloud + tracked objects.
+
+    Always returns 200 with best-effort data; ``description`` explains
+    any degraded state (no camera, no depth engine, etc.).
+    """
+    try:
+        from tools import vision_analyze_full
+
+        data = await asyncio.get_running_loop().run_in_executor(
+            None, vision_analyze_full, None,
+        )
+        return {
+            "point_cloud": data.get("point_cloud", [])[:3000],
+            "tracked_objects": data.get("tracked", []),
+            "description": data.get("description", ""),
+        }
+    except Exception as e:
+        logger.warning("api_hologram error: %s", e)
+        # Return empty but valid hologram payload so the frontend always works
+        return {
+            "point_cloud": [],
+            "tracked_objects": [],
+            "description": f"Hologram unavailable: {e}",
+        }
 
 
 # ── MJPEG camera stream ──────────────────────────────────────────────────

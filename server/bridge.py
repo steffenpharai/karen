@@ -110,6 +110,15 @@ class Bridge:
     async def send_proactive(self, text: str) -> None:
         await self.broadcast({"type": "proactive", "text": text})
 
+    async def send_hologram(self, data: dict) -> None:
+        await self.broadcast({"type": "hologram", "data": data})
+
+    async def send_vitals(self, data: dict) -> None:
+        await self.broadcast({"type": "vitals", "data": data})
+
+    async def send_threat(self, data: dict) -> None:
+        await self.broadcast({"type": "threat", "data": data})
+
     # ------------------------------------------------------------------
     # Inbound: client → orchestrator
     # ------------------------------------------------------------------
@@ -154,6 +163,12 @@ class Bridge:
             result = toggle_sarcasm(enabled)
             await self.broadcast({"type": "reply", "text": result})
 
+        elif msg_type == "hologram_request":
+            await self._handle_hologram_request()
+
+        elif msg_type == "vitals_request":
+            await self._handle_vitals_request()
+
         else:
             logger.debug("Unknown WS message type: %r", msg_type)
 
@@ -175,6 +190,53 @@ class Bridge:
             None, run_tool, "get_jetson_status", {}
         )
         await self.broadcast({"type": "system_status", "status": status})
+
+    async def _handle_hologram_request(self) -> None:
+        """Generate hologram data and broadcast to all clients."""
+        try:
+            from tools import vision_analyze_full
+
+            data = await asyncio.get_running_loop().run_in_executor(
+                None, vision_analyze_full, None,
+            )
+            hologram_payload = {
+                "point_cloud": data.get("point_cloud", [])[:3000],
+                "tracked_objects": data.get("tracked", []),
+                "description": data.get("description", ""),
+            }
+            await self.send_hologram(hologram_payload)
+        except Exception as e:
+            logger.warning("Hologram request failed: %s", e)
+            await self.send_error(f"Hologram generation failed: {e}")
+
+    async def _handle_vitals_request(self) -> None:
+        """Return latest vitals snapshot via WS."""
+        try:
+            from vision.shared import get_vitals_analyzer
+
+            analyzer = await asyncio.get_running_loop().run_in_executor(
+                None, get_vitals_analyzer,
+            )
+            if analyzer is None:
+                await self.send_vitals({
+                    "fatigue": "unknown",
+                    "posture": "unknown",
+                    "heart_rate": None,
+                    "hr_confidence": 0,
+                    "alerts": [],
+                })
+                return
+
+            result = analyzer.last_result
+            await self.send_vitals({
+                "fatigue": result.fatigue_level,
+                "posture": result.posture_label,
+                "heart_rate": result.heart_rate_bpm,
+                "hr_confidence": result.heart_rate_confidence,
+                "alerts": result.alerts,
+            })
+        except Exception as e:
+            logger.warning("Vitals request failed: %s", e)
 
 
 # Module-level singleton

@@ -15,12 +15,15 @@ def build_messages_with_history(
     reminders_text: str | None = None,
     current_time: str | None = None,
     system_stats: str | None = None,
+    vitals_text: str | None = None,
+    threat_text: str | None = None,
     max_turns: int = 4,
 ) -> list[dict]:
     """Build chat messages: system + last N turns + current user message.
 
-    Context (time, stats, scene, reminders) is injected as a compact prefix on
-    the current user message so the LLM doesn't need to call tools for it.
+    Context (time, stats, scene, vitals, threat, reminders) is injected as a
+    compact prefix on the current user message so the LLM doesn't need to
+    call tools for it.
     Long summary capped at 300 chars; history at ``max_turns`` (default 4).
     """
     from config import settings
@@ -41,6 +44,10 @@ def build_messages_with_history(
     if vision_description:
         # Truncate scene to ~200 chars to save tokens
         ctx_parts.append(f"Scene:{vision_description[:200]}")
+    if vitals_text:
+        ctx_parts.append(f"Vitals:{vitals_text[:100]}")
+    if threat_text:
+        ctx_parts.append(f"Threat:{threat_text[:80]}")
     if reminders_text:
         ctx_parts.append(f"Rem:{reminders_text[:150]}")
     ctx_line = "[" + ";".join(ctx_parts) + "]" if ctx_parts else ""
@@ -68,6 +75,8 @@ def build_messages(
     reminders_text: str | None = None,
     current_time: str | None = None,
     system_stats: str | None = None,
+    vitals_text: str | None = None,
+    threat_text: str | None = None,
 ) -> list[dict]:
     """Build chat messages for Ollama: system + context + user (no history)."""
     ctx_parts = []
@@ -77,6 +86,10 @@ def build_messages(
         ctx_parts.append(f"Sys:{system_stats}")
     if vision_description:
         ctx_parts.append(f"Scene:{vision_description[:200]}")
+    if vitals_text:
+        ctx_parts.append(f"Vitals:{vitals_text[:100]}")
+    if threat_text:
+        ctx_parts.append(f"Threat:{threat_text[:80]}")
     if reminders_text:
         ctx_parts.append(f"Rem:{reminders_text[:150]}")
     content = user_text

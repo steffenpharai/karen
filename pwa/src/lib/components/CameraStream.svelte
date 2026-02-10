@@ -1,13 +1,25 @@
 <!--
-  Live camera feed via MJPEG <img src="/stream"> + detection overlay.
+  Live camera feed via MJPEG <img src="/stream"> + detection/threat overlay.
   Detections come from WebSocket (type: detections/scan_result).
 -->
 <script lang="ts">
-	import { detections, serverHost, getApiUrl } from '$lib/stores/connection';
+	import { detections, getApiUrl, threatData } from '$lib/stores/connection';
 
 	let det = $derived($detections);
+	let threat = $derived($threatData);
 	let streamUrl = $derived(getApiUrl('/stream'));
 	let imgError = $state(false);
+
+	let detCount = $derived(det.detections?.length ?? 0);
+	let threatLevel = $derived(threat?.level ?? 'clear');
+
+	const threatBorderColors: Record<string, string> = {
+		clear: 'border-transparent',
+		low: 'border-[var(--color-jarvis-cyan)]/30',
+		moderate: 'border-amber-500/50',
+		high: 'border-[var(--color-jarvis-red)]/60',
+		critical: 'border-[var(--color-jarvis-red)]',
+	};
 
 	function handleImgError() {
 		imgError = true;
@@ -18,7 +30,7 @@
 	}
 </script>
 
-<div class="relative glass overflow-hidden">
+<div class="relative glass overflow-hidden border-2 transition-colors duration-500 {threatBorderColors[threatLevel] ?? 'border-transparent'}">
 	<div class="relative aspect-video bg-[var(--color-jarvis-surface)]">
 		{#if imgError}
 			<div class="absolute inset-0 flex items-center justify-center">
@@ -41,7 +53,26 @@
 			/>
 		{/if}
 
-		<!-- Detection info overlay -->
+		<!-- Top-right: detection count + threat badge -->
+		<div class="absolute top-2 right-2 flex items-center gap-1.5">
+			{#if detCount > 0}
+				<span class="text-[10px] px-1.5 py-0.5 rounded bg-black/60 text-[var(--color-jarvis-cyan)] font-mono backdrop-blur-sm">
+					{detCount} det
+				</span>
+			{/if}
+			{#if threatLevel !== 'clear'}
+				<span class="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold uppercase backdrop-blur-sm
+					{threatLevel === 'high' || threatLevel === 'critical'
+						? 'bg-[var(--color-jarvis-red)]/30 text-[var(--color-jarvis-red)]'
+						: threatLevel === 'moderate'
+							? 'bg-amber-500/30 text-amber-400'
+							: 'bg-[var(--color-jarvis-cyan)]/20 text-[var(--color-jarvis-cyan)]'}">
+					{threatLevel}
+				</span>
+			{/if}
+		</div>
+
+		<!-- Bottom: detection info overlay -->
 		{#if det.description}
 			<div class="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-3 py-2">
 				<p class="text-xs text-[var(--color-jarvis-cyan)] truncate">{det.description}</p>
