@@ -1,492 +1,571 @@
-# J.A.R.V.I.S. – Offline Voice Assistant on Jetson Orin Nano Super
+<div align="center">
 
-A fully offline AI assistant modelled on **J.A.R.V.I.S.** from the Iron Man films (Paul Bettany's portrayal), running on the **Jetson Orin Nano Super Developer Kit (8GB)** with JetPack 6.x. Uses Bluetooth (e.g. Google Pixel Buds 2) for mic and TTS output, USB webcam for vision, and runs LLM (Ollama/Qwen3), STT (Faster-Whisper), TTS (Piper), and wake word (openWakeWord) locally.
+# K.A.R.E.N. — Your Personal J.A.R.V.I.S. on Jetson
 
-Includes a **SvelteKit PWA** frontend served over the LAN and a **FastAPI WebSocket bridge** so you can chat, view the camera feed, manage reminders, and receive real-time hologram, vitals, and threat data — all from any device on the network.
+**A fully offline, Iron Man-style voice + vision AI assistant running entirely on a $249 Jetson Orin Nano Super (8 GB). No cloud. No API keys. No subscriptions. Just you and your AI.**
 
-### Jarvis-Level Vision Features (v2)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![JetPack](https://img.shields.io/badge/JetPack-6.x-76b900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetpack)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Ollama](https://img.shields.io/badge/Ollama-Qwen3_1.7b-000000?logo=ollama)](https://ollama.com)
+[![SvelteKit](https://img.shields.io/badge/SvelteKit-PWA-FF3E00?logo=svelte&logoColor=white)](https://kit.svelte.dev)
+[![Tests](https://img.shields.io/badge/tests-247_passing-brightgreen?logo=pytest)](tests/)
+[![GitHub stars](https://img.shields.io/github/stars/steffenpharai/karen?style=social)](https://github.com/steffenpharai/karen)
 
-The vision system now goes far beyond basic object detection, providing a full Iron Man-style situational awareness suite:
+*"At your service, sir."*
 
-- **Dynamic Open-Vocabulary Prompting** — text prompts in `vision_analyze` (e.g. "tired person, coffee mug") via YOLOE `set_classes()`; defaults to prompt-free mode
-- **Vitals & Health Monitoring** — MediaPipe Face Mesh + Pose for fatigue detection (Eye Aspect Ratio), posture scoring, and best-effort rPPG heart rate estimation from face colour changes
-- **Threat & Anomaly Detection** — ByteTrack object tracking with velocity estimation, unknown-object flagging, and LLM-integrated threat-level scoring (low / medium / high / critical)
-- **3D Scene Reconstruction & Hologram** — DepthAnything V2 Small (TensorRT FP16) for depth estimation, real-time point cloud generation, and Three.js 3D rendering in the PWA (with automatic 2D Canvas fallback when WebGL is unavailable)
-- **Portable / Walk-Around Mode** — `--portable` flag: lower resolution (320×320), 10 FPS, frame-skipping for depth/vitals, thermal throttling, battery-aware scanning
-- **Vision-Enhanced Orchestrator** — enriched LLM context (detections + depth + vitals + threat), `hologram_render` tool for on-demand 3D visualization
-- **Continuous Autonomous Broadcast** — background vision loop pushes hologram, vitals, and threat data to all connected PWA clients via WebSocket every few seconds
-- **Error Resilience** — camera auto-reconnect, OOM recovery (pause vision during LLM inference), low-light detection, WebGL graceful degradation
+</div>
 
-## Performance
+---
 
-Optimised for **sub-2-second** chat and **sub-10-second** tool calls on the 8 GB Jetson:
+<!-- TODO: Replace with your recorded GIF/video -->
+<!-- Record a 15-20s clip: wake word trigger → voice query → YOLOE detection overlay → hologram render → sarcastic JARVIS reply via Bluetooth earbuds. Upload to GitHub and uncomment: -->
+<!-- <p align="center"><img src="docs/assets/demo.gif" width="720" alt="KAREN demo — wake word to hologram in under 4 seconds"></p> -->
 
-| Tuning | Value | Why |
-|--------|-------|-----|
-| Model | `qwen3:1.7b` (Q4_K_M, 1.4 GB) | Native tool-calling, fits 100% GPU at 8192 ctx |
-| Context window | **8192 tokens** | 100% GPU at 2.0 GB total; 3.5x faster than old 2048 (eliminates KV-cache thrashing) |
-| Thinking | **Adaptive** — `think=false` for chat, `think=true` for tools | Qwen3 requires reasoning chain for tool routing; plain chat skips it for speed |
-| Output cap | **512 tokens** (`num_predict`) | Qwen3 thinking tokens count toward budget; 256 starved content |
-| Temperature | 0.6 | Faster convergence, deterministic |
-| GPU offload | **100% GPU** (2.0 GB) | Old 2048 limit was sized for Llama3.2:3b; Qwen3:1.7b is 600 MB lighter |
-| Tool routing | **Intent-based** | Only sends tool schemas when query matches keywords; prevents wasted think budget |
-| Tool schemas | 4 (was 7) | Time, stats, reminders already injected into context |
-| History | 4 turns | Less prefill work for the GPU |
+<p align="center">
+  <strong>
+    <a href="#-quick-start">Quick Start</a> · <a href="#-features">Features</a> · <a href="#-performance">Performance</a> · <a href="#-architecture">Architecture</a> · <a href="#-roadmap">Roadmap</a> · <a href="#-community">Community</a>
+  </strong>
+</p>
 
-Benchmarked latencies (warm, 100% GPU):
+---
 
-| Scenario | Latency | Mode |
-|----------|---------|------|
-| Greeting / status / time | **0.5–0.7 s** | `think=false`, no tools |
-| Tool call (joke, reminder, sarcasm) | **3.6–8.4 s** | `think=true`, selected tools only |
-| Vision query (pre-fetched) | **0.7 s** | `think=false`, scene in context |
+## Why KAREN?
 
-Context size benchmarks (Jetson Orin Nano 8 GB, Qwen3:1.7b):
+Most "local AI assistants" are a chatbot with a microphone. KAREN is what happens when you actually build the full Iron Man experience on a $249 board:
 
-| num_ctx | Model Size | GPU% | Chat Latency |
-|---------|-----------|------|-------------|
-| 2048 | 1.6 GB | 100% | 12.9 s (KV thrashing) |
-| 4096 | 1.7 GB | 100% | 4.1 s |
-| **8192** | **2.0 GB** | **100%** | **3.5 s** ← production |
-| 12288 | 2.3 GB | 100% | ~4 s (swap pressure) |
-| 16384 | 2.6 GB | 30/70 CPU/GPU | slow (unacceptable) |
+| What others do | What KAREN does |
+|:---|:---|
+| Text chat with local LLM | **Wake word → STT → LLM with tools → TTS** through Bluetooth earbuds |
+| Maybe a webcam feed | **TensorRT YOLOE open-vocab detection** + ByteTrack tracking + **3D holograms** |
+| "Works on my 4090" | **Runs on 8 GB shared RAM** — LLM + vision + depth + vitals simultaneously |
+| Cloud fallback "for now" | **Zero cloud dependencies.** Everything local. Always. |
+| Basic web UI | **SvelteKit PWA** with live camera, Three.js holograms, vitals, Iron Man HUD, threat alerts |
+| No health awareness | **rPPG heart rate**, fatigue detection, posture scoring, proactive health alerts |
+| Crashes on OOM | **Multi-layer CUDA OOM recovery** with automatic context reduction and model reload |
 
-## Requirements
+---
 
-- **Hardware**: Jetson Orin Nano Super (8GB), 128 GB+ storage (microSD or SSD), USB webcam, Bluetooth earbuds (e.g. Pixel Buds 2)
-- **OS**: JetPack 6.x (L4T R36.x), Ubuntu 22.04 base
-- **RAM**: Keep total usage under ~7.5 GiB to avoid swap on microSD
+## ✨ Features
 
-## Power mode (MAXN_SUPER)
+### Voice Pipeline
+- **openWakeWord** — custom wake word, always listening
+- **Faster-Whisper** — local STT, no cloud transcription
+- **Piper TTS** — British male voice (Paul Bettany energy)
+- **Bluetooth** — full HFP/A2DP support for wireless earbuds
 
-For best performance, use MAXN_SUPER and lock max clocks:
+### LLM Brain
+- **Qwen3:1.7b** (Q4_K_M) via Ollama — native tool-calling, 100% GPU offload
+- **8192-token context** — sweet spot for 8 GB: fast inference, no swap pressure
+- **Intent-based routing** — only sends tool schemas when needed (0.5s greetings, not 8s)
+- **Adaptive thinking** — `think=false` for chat, `think=true` for tool calls
+- **JARVIS persona** — formal British wit, sarcasm toggle, MCU-accurate responses
 
-```bash
-# Check current mode (should show MAXN_SUPER)
-sudo nvpmodel -q
+### Vision Suite
+- **YOLOE-26N** (TensorRT FP16) — open-vocabulary detection, set any prompt at runtime
+- **ByteTrack** — multi-object tracking with velocity estimation
+- **DepthAnything V2 Small** (TensorRT FP16) — real-time depth maps for 3D holograms
+- **MediaPipe** — face mesh (EAR fatigue, rPPG heart rate) + pose (posture scoring)
+- **Threat detection** — anomaly scoring with LLM-integrated alerts
+- **Portable mode** — 320×320 @ 10 FPS with thermal throttling for walk-around use
 
-# Lock max CPU/GPU/EMC clocks
-sudo jetson_clocks
+### Iron Man PWA
+- **Live MJPEG** camera feed with detection overlays and threat-level borders
+- **Three.js holograms** — real-time 3D point cloud visualization (2D Canvas fallback)
+- **HUD overlay** — Iron Man-style AR tracking with real-time annotations
+- **Vitals dashboard** — fatigue, posture, heart rate, all via WebSocket
+- **Jetson stats** — GPU/CPU/thermal monitoring
+- **Reminders** — create and manage via voice or UI
+- **Accessible from any device** on the LAN
 
-# Monitor thermals and power
-tegrastats
-# or install: sudo pip3 install jetson-stats && jtop
-```
+### Robustness
+- **247 unit + E2E tests** with pytest
+- **Multi-layer CUDA OOM protection** — auto context reduction (8192→4096→2048→1024)
+- **Camera auto-reconnect** on USB disconnect
+- **Graceful degradation** — every subsystem is optional, pipeline continues if one fails
 
-## System packages (audio & Bluetooth)
+---
 
-```bash
-sudo apt update
-sudo apt install -y wireplumber pipewire-audio pipewire-pulse bluez-tools pulseaudio-utils
-```
+## ⚡ Performance
 
-Set default sink/source for Pixel Buds via `pactl` or `wpctl` (after Wireplumber), or use your desktop sound settings.
+Real benchmarks on Jetson Orin Nano Super (8 GB), MAXN_SUPER, `jetson_clocks`:
 
-## Bluetooth pairing (Pixel Buds 2)
+| Scenario | Latency | Notes |
+|:---|:---|:---|
+| Greeting / status / time | **0.5 – 0.7s** | `think=false`, no tools — instant |
+| Tool call (joke, reminder) | **3.6 – 8.4s** | `think=true`, selected tools only |
+| Vision query (pre-fetched) | **0.7s** | Scene already in context |
+| Full voice loop (wake → reply) | **< 4s** | STT + LLM + TTS for simple queries |
 
-1. Put the buds in pairing mode.
-2. On the Jetson:
+<details>
+<summary><strong>Context size benchmarks</strong></summary>
 
-```bash
-bluetoothctl
-power on
-scan on
-# Find "Pixel Buds" (or your device), note the MAC address
-pair <MAC>
-trust <MAC>
-connect <MAC>
-```
+| num_ctx | VRAM | GPU% | Chat Latency | Verdict |
+|:---|:---|:---|:---|:---|
+| 2048 | 1.6 GB | 100% | 12.9s | KV thrashing — unusable |
+| 4096 | 1.7 GB | 100% | 4.1s | Acceptable |
+| **8192** | **2.0 GB** | **100%** | **3.5s** | **Production pick** |
+| 12288 | 2.3 GB | 100% | ~4s | Swap pressure |
+| 16384 | 2.6 GB | 30/70 | Slow | Spills to CPU — no go |
 
-3. **A2DP** is used for high-quality TTS output. For **mic input**, many buds need **HFP/HSP**. If the buds do not appear as an input device, switch the profile to HFP in `bluetoothctl` or via Blueman. If HFP is unreliable on JetPack 6.x, use a **USB microphone** as fallback and keep A2DP for output only.
+</details>
 
-## Python environment
+<details>
+<summary><strong>Memory budget breakdown</strong></summary>
 
-```bash
-cd /home/jarvis/Jarvis
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+| Component | RAM | Notes |
+|:---|:---|:---|
+| Qwen3:1.7b @ 8192 ctx | ~2.0 GB | 100% GPU, flash attention + q8_0 KV |
+| YOLOE-26N TensorRT | ~0.3 GB | FP16 engine |
+| DepthAnything V2 Small | ~0.4 GB | FP16 engine, optional |
+| MediaPipe (face + pose) | ~0.1 GB | CPU inference |
+| Faster-Whisper small | ~0.5 GB | Loaded on demand |
+| OS + Desktop + Python | ~3.5 GB | JetPack 6.x + X11 |
+| **Total** | **~6.8 GB** | Fits in 7.6 GB with headroom |
 
-## CUDA and PyTorch (per NVIDIA)
+</details>
 
-For GPU-accelerated PyTorch (e.g. YOLO TensorRT export), follow [NVIDIA's official guide](https://docs.nvidia.com/deeplearning/frameworks/install-pytorch-jetson-platform/index.html):
+---
 
-1. **System packages** (once):
-   ```bash
-   sudo apt-get -y update
-   sudo apt-get install -y python3-pip libopenblas-dev
-   ```
+## 🚀 Quick Start
 
-2. **cuSPARSELt** (required for PyTorch 24.06+ on JetPack 6.x):
-   ```bash
-   bash scripts/install-cusparselt.sh
-   ```
+### Prerequisites
 
-3. **CUDA in PATH** – ensure `/etc/profile.d/cuda.sh` exists:
-   ```bash
-   sudo bash scripts/install-cuda-path.sh
-   ```
+- **Jetson Orin Nano Super** (8 GB) with JetPack 6.x
+- USB webcam + Bluetooth earbuds (or USB mic + speakers)
+- Ollama installed ([one-line install](https://ollama.com/install.sh))
 
-4. **PyTorch with CUDA** in the project venv:
-   ```bash
-   source venv/bin/activate
-   . /etc/profile.d/cuda.sh
-   bash scripts/install-pytorch-cuda-nvidia.sh
-   ```
-
-5. **Verify**:
-   ```bash
-   . /etc/profile.d/cuda.sh && python -c "import torch; print('CUDA:', torch.cuda.is_available())"
-   ```
-   You should see `CUDA: True` and device `Orin`.
-
-## Ollama (local install)
-
-Install Ollama locally as in [Jetson AI Lab – Ollama on Jetson](https://www.jetson-ai-lab.com/tutorials/ollama/):
+### One-command setup
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
+# Clone and enter
+git clone https://github.com/steffenpharai/karen.git && cd karen
 
-Pull the default model:
+# Setup Python environment
+python3 -m venv venv && source venv/bin/activate
+pip install --upgrade pip && pip install -r requirements.txt
 
-```bash
+# Download all models (wake word, STT, TTS voice)
+bash scripts/bootstrap_models.sh
+
+# Pull the LLM
 ollama pull qwen3:1.7b
-```
 
-### Ollama memory optimisation (8 GB Jetson)
-
-On the Orin Nano, GPU and CPU share the same 7.6 GiB RAM. The project configures Ollama via a systemd drop-in (`/etc/systemd/system/ollama.service.d/gpu.conf`) for maximum GPU offload:
-
-| Layer | Setting | Effect |
-|-------|---------|--------|
-| **systemd** | `OLLAMA_FLASH_ATTENTION=1` | Flash attention (dramatically less KV cache memory) |
-| **systemd** | `OLLAMA_KV_CACHE_TYPE=q8_0` | 8-bit KV cache (halves memory vs f16) |
-| **systemd** | `OLLAMA_NUM_PARALLEL=1` | No duplicate KV caches |
-| **systemd** | `OLLAMA_MAX_LOADED_MODELS=1` | Only one model in GPU at a time |
-| **systemd** | `OLLAMA_CONTEXT_LENGTH=8192` | Default context length (Qwen3:1.7b sweet spot) |
-| **systemd** | `OLLAMA_GPU_OVERHEAD=1500000000` | Reserve ~1.5 GB for X11/GNOME/Cursor/YOLOE |
-| **systemd** | `OLLAMA_KEEP_ALIVE=5m` | Unload model after 5 min idle |
-| **Python** | `num_ctx=8192`, `num_predict=512` | Cap context and output per request |
-| **Python** | `think=false` (chat) / `think=true` (tools) | Adaptive: Qwen3 needs reasoning for tool routing |
-| **Python** | Intent-based tool routing | Only sends tool schemas when query matches keywords |
-| **Python** | OOM recovery | On CUDA OOM: unload model, drop caches, retry with smaller ctx (8192→4096→2048→1024) |
-
-Apply all settings:
-
-```bash
+# Configure Ollama for 8GB Jetson (flash attention, 8-bit KV cache, etc.)
 sudo bash scripts/configure-ollama-systemd.sh
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# Verify: should show 100% GPU, context 8192
-ollama ps
+# Build the PWA frontend
+cd pwa && npm install && npm run build && cd ..
+
+# Launch! (full-stack: voice + vision + PWA + Iron Man HUD)
+python main.py --serve
 ```
 
-## First-time setup: download all models
+Open `http://<jetson-ip>:8000` from any device on your network. That's it.
 
-After `pip install -r requirements.txt`, run the bootstrap script to download openWakeWord, Faster-Whisper (small), and the Piper voice. Optionally build the YOLOE-26N TensorRT engine.
-
-```bash
-source venv/bin/activate
-bash scripts/bootstrap_models.sh
-# Optional: build YOLOE-26N TensorRT engine (requires CUDA)
-bash scripts/bootstrap_models.sh --with-yolo
-```
-
-Ensure Ollama has the default model: `ollama pull qwen3:1.7b`.
-
-## Piper TTS (British male voice)
-
-The **British male voice** (en_GB-alan-medium) is included under `models/voices/`:
-
-- `models/voices/en_GB-alan-medium.onnx` – voice model
-- `models/voices/en_GB-alan-medium.onnx.json` – config
-
-To use another voice, set `JARVIS_TTS_VOICE` to the full path of a `.onnx` file, or add more voices from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
-
-## Vision (YOLOE-26N TensorRT)
-
-To use TensorRT-accelerated **YOLOE-26N** (Ultralytics YOLOE, prompt-free nano):
+<details>
+<summary><strong>Optional: TensorRT engines for vision</strong></summary>
 
 ```bash
-source venv/bin/activate
-. /etc/profile.d/cuda.sh
+source venv/bin/activate && . /etc/profile.d/cuda.sh
+
+# YOLOE-26N detection engine (required for vision)
 bash scripts/export_yolo_engine.sh
-```
 
-Output: `models/yoloe26n.engine`. Engine build can take several minutes on device.
-
-**USB camera**: default is index `0` (`/dev/video0`). Set `JARVIS_CAMERA_DEVICE=/dev/video0` to force a device path, or `JARVIS_CAMERA_INDEX=1` for a second camera.
-
-### Depth Engine (DepthAnything V2 Small)
-
-For hologram / 3D scene reconstruction, export the DepthAnything V2 Small TensorRT engine:
-
-```bash
-source venv/bin/activate
-. /etc/profile.d/cuda.sh
+# DepthAnything V2 depth engine (required for 3D holograms)
 bash scripts/export_depth_engine.sh
 ```
 
-Output: `models/depth_anything_v2_small.engine` (FP16). Enable with `JARVIS_DEPTH_ENABLED=1`.
+Engine builds run on-device and take several minutes. Once built, they're cached in `models/`.
 
-### Enriched Vision Pipeline
+</details>
 
-When `--serve` or `--orchestrator` is active, the vision system runs a full enriched pipeline every cycle:
+<details>
+<summary><strong>Optional: CUDA + PyTorch for Jetson</strong></summary>
+
+```bash
+# System dependencies
+sudo apt-get install -y python3-pip libopenblas-dev
+
+# cuSPARSELt (required for PyTorch 24.06+ on JetPack 6.x)
+bash scripts/install-cusparselt.sh
+
+# CUDA in PATH
+sudo bash scripts/install-cuda-path.sh
+
+# PyTorch with CUDA (Jetson wheel)
+source venv/bin/activate && . /etc/profile.d/cuda.sh
+bash scripts/install-pytorch-cuda-nvidia.sh
+
+# Verify
+python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+```
+
+</details>
+
+---
+
+## 🔧 Usage
+
+```bash
+source venv/bin/activate
+
+python main.py --serve              # Full-stack: API + PWA + voice + vision
+python main.py --serve --portable   # Walk-around mode: 320x320, 10 FPS, thermal-aware
+python main.py --orchestrator       # Voice-only agentic loop (no web UI)
+python main.py --e2e                # Voice loop without tools
+python main.py --one-shot "Hello"   # Single text query (no mic needed)
+python main.py --dry-run            # Validate config
+python main.py --test-audio         # List audio devices
+python main.py --yolo-visualize     # Live camera + YOLOE detections (OpenCV window)
+```
+
+### Tools available to the LLM
+
+| Tool | What it does |
+|:---|:---|
+| `vision_analyze` | Re-scan camera with optional open-vocabulary prompt |
+| `hologram_render` | Generate 3D hologram and push to all connected PWA clients |
+| `create_reminder` | Save a reminder with optional time |
+| `tell_joke` | Deliver a J.A.R.V.I.S.-quality one-liner |
+| `toggle_sarcasm` | Toggle sarcasm mode (you've been warned) |
+
+Time, system stats, scene description, vitals, threat level, and reminders are injected directly into context — no tool call overhead for those.
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph VOICE["🎙️ Voice Pipeline"]
+        WW[openWakeWord] --> STT[Faster-Whisper STT]
+        STT --> ORCH
+        TTS[Piper TTS<br/>British Male] --> BT[Bluetooth<br/>HFP/A2DP]
+    end
+
+    subgraph BRAIN["🧠 LLM Brain"]
+        ORCH[Orchestrator<br/>Intent Router] --> LLM[Qwen3:1.7b<br/>Ollama · 100% GPU]
+        LLM --> TOOLS[Tool Executor]
+        TOOLS --> ORCH
+        MEM[Short/Long-term<br/>Memory] --> ORCH
+    end
+
+    subgraph VISION["👁️ Vision Suite"]
+        CAM[USB Camera] --> YOLO[YOLOE-26N<br/>TensorRT]
+        YOLO --> TRACK[ByteTrack<br/>Tracking]
+        CAM --> DEPTH[DepthAnything V2<br/>TensorRT]
+        CAM --> MP[MediaPipe<br/>Face + Pose]
+        TRACK --> THREAT[Threat<br/>Scorer]
+        MP --> VITALS[Vitals<br/>EAR · Posture · rPPG]
+    end
+
+    subgraph SERVER["🌐 Server"]
+        API[FastAPI] --> WS[WebSocket<br/>Bridge]
+        API --> MJPEG[MJPEG<br/>Stream]
+        API --> REST[REST API]
+    end
+
+    subgraph PWA["📱 SvelteKit PWA"]
+        CHAT[Chat Panel]
+        HOLO[Three.js<br/>Hologram]
+        HUD[Iron Man<br/>HUD Overlay]
+        VIT[Vitals Panel]
+        DASH[Jetson Stats]
+    end
+
+    ORCH --> TTS
+    VISION --> WS
+    VISION --> ORCH
+    WS --> PWA
+    LLM --> API
+
+    style VOICE fill:#1a1a2e,stroke:#e94560,color:#fff
+    style BRAIN fill:#1a1a2e,stroke:#0f3460,color:#fff
+    style VISION fill:#1a1a2e,stroke:#16213e,color:#fff
+    style SERVER fill:#1a1a2e,stroke:#533483,color:#fff
+    style PWA fill:#1a1a2e,stroke:#e94560,color:#fff
+```
+
+<details>
+<summary><strong>Vision pipeline detail</strong></summary>
 
 ```
 Camera Frame
   ├─ YOLOE-26N (TensorRT) → detections + open-vocab prompting
-  ├─ ByteTrack → multi-object tracking + velocity
+  ├─ ByteTrack → multi-object tracking + velocity estimation
   ├─ MediaPipe Face Mesh → EAR fatigue detection, rPPG heart rate
   ├─ MediaPipe Pose → posture scoring
-  ├─ DepthAnything V2 Small → depth map + point cloud (optional)
+  ├─ DepthAnything V2 Small → depth map + 3D point cloud
   └─ ThreatScorer → threat assessment (low/medium/high/critical)
        ↓
-  Broadcast via WebSocket → PWA (hologram, vitals, threat panels)
+  WebSocket broadcast → PWA (hologram, vitals, threat panels)
        ↓
   Injected into LLM context → proactive alerts
 ```
 
-All subsystems are optional and degrade gracefully — if a component fails or isn't available, the pipeline skips it and continues with the rest.
+</details>
 
-## Running Jarvis
+---
 
-```bash
-source venv/bin/activate
-
-# Validate config
-python main.py --dry-run
-
-# List audio devices
-python main.py --test-audio
-
-# Phase 1 test: wake word → play "Hello Sir"
-python main.py --voice-only
-
-# One-shot (no mic): text → LLM → TTS → play
-python main.py --one-shot "What time is it?"
-
-# Full loop: wake → STT → Ollama → TTS (with vision)
-python main.py --e2e
-
-# Agentic orchestrator: wake → STT → LLM with tools + context → TTS
-python main.py --orchestrator
-
-# Full-stack server: FastAPI + WebSocket bridge + PWA + orchestrator
-python main.py --serve
-
-# Portable/walk-around mode (320x320, 10 FPS, thermal-aware)
-python main.py --serve --portable
-
-# Live YOLOE camera preview (OpenCV window)
-python main.py --yolo-visualize
-
-# With status overlay
-python main.py --e2e --gui
-```
-
-Stop with `Ctrl+C`.
-
-### Server mode (`--serve`)
-
-Runs FastAPI (uvicorn) + orchestrator in one process. Exposes:
-
-- **WebSocket** (`/ws`) – bidirectional: send text queries from the PWA, receive status/reply/detections/vitals/threat/hologram broadcasts
-- **REST API** – `/health`, `/api/status`, `/api/stats`, `/api/reminders`, `/api/hologram`
-- **MJPEG stream** (`/stream`) – live camera + YOLOE overlay
-- **PWA** – SvelteKit frontend served at `/` (build with `npm run build` in `pwa/`)
-- **Continuous vision broadcast** – background task runs the enriched pipeline and pushes hologram, vitals, and threat data to all connected clients every `JARVIS_VISION_BROADCAST_SEC` seconds (default: 5)
-
-Connect from any device on the LAN: `http://<jetson-ip>:8000`.
-
-### Portable mode (`--portable`)
-
-Optimised for walk-around use with battery/thermal constraints:
-
-- Camera resolution reduced to 320×320 at 10 FPS
-- Depth runs every Nth frame (`JARVIS_PORTABLE_DEPTH_SKIP`, default: 3)
-- Vitals run every Nth frame (`JARVIS_PORTABLE_VITALS_SKIP`, default: 5)
-- Thermal throttling pauses non-essential vision at `JARVIS_THERMAL_PAUSE_C` (default: 80°C)
-
-Combine with `--serve` for full PWA access while mobile.
-
-### Orchestrator (agentic mode)
-
-With `--orchestrator` or `--serve`, J.A.R.V.I.S. runs an async loop with **short- and long-term context**, **intent-based tool routing**, and **proactive** idle checks. Session summary and reminders are stored under `data/`.
-
-**Intent-based tool routing**: instead of sending all tool schemas on every request (which wastes the 1.7b model's think budget on simple queries), the orchestrator uses deterministic keyword matching to decide which tools — if any — to include. This is the standard production pattern used by Alexa, Rasa, and Dialogflow for resource-constrained NLU.
-
-| Query type | Route | Think | Latency |
-|------------|-------|-------|---------|
-| Greeting, status, time, goodnight | No tools, `think=false` | No | 0.5–0.7 s |
-| "Tell me a joke" | `tell_joke` only, `think=true` | Yes | ~6 s |
-| "Remind me to..." | `create_reminder` only, `think=true` | Yes | ~8 s |
-| "Turn on sarcasm" | `toggle_sarcasm` only, `think=true` | Yes | ~4 s |
-| "Re-scan the camera" | `vision_analyze` only, `think=true` | Yes | ~5 s |
-
-Tools available to the LLM (via Ollama Hermes-style tool-calling):
-
-| Tool | Description |
-|------|-------------|
-| `vision_analyze` | Re-scan camera with optional focus prompt (open-vocabulary) |
-| `hologram_render` | Generate 3D hologram of current scene and push to PWA display |
-| `create_reminder` | Save a reminder with optional time |
-| `tell_joke` | Tell a witty one-liner (J.A.R.V.I.S.-style dry wit) |
-| `toggle_sarcasm` | Toggle sarcasm mode |
-
-Time, system stats, scene description (with detections, vitals, and threat level), and pending reminders are **injected directly into the user context** — the LLM doesn't need tools for those.
-
-## PWA Frontend
-
-The SvelteKit PWA lives in `pwa/`. To build:
-
-```bash
-cd pwa
-npm install
-npm run build
-cd ..
-```
-
-The built files in `pwa/build/` are served automatically by `--serve` mode. Components:
-
-- **ChatPanel** – send text queries, view Jarvis replies
-- **VoiceControls** – trigger wake/listen from the browser, quick-action buttons for hologram & vitals
-- **CameraStream** – live MJPEG feed with YOLOE overlay, detection count badge, threat-level border
-- **HologramView** – real-time 3D point cloud (Three.js) with tracked-object boxes; automatic 2D Canvas fallback when WebGL is unavailable
-- **VitalsPanel** – live fatigue, posture, and heart rate display (WebSocket-driven)
-- **VitalsMini** – compact single-row vitals + threat summary for mobile layout
-- **Dashboard** – Jetson GPU/CPU/thermal stats
-- **StatusBar** – connection status, threat-level badge, fatigue indicator
-- **Reminders** – create and view reminders
-- **SettingsPanel** – sarcasm toggle, connection status
-
-## Options
-
-| Option | Description |
-|--------|-------------|
-| `--dry-run` | Validate config and exit |
-| `--test-audio` | List input devices and default sink/source |
-| `--voice-only` | Wake word only; on trigger, play TTS "Hello Sir" |
-| `--one-shot [PROMPT]` | Text → LLM → TTS → play (no mic needed) |
-| `--e2e` | Full loop: wake → record → STT → LLM → TTS (with vision) |
-| `--orchestrator` | Agentic loop: wake → STT → LLM with tools + context → TTS |
-| `--serve` | Full-stack: FastAPI + WebSocket + PWA + orchestrator + vision broadcast |
-| `--portable` | Portable/walk-around mode: 320×320, 10 FPS, thermal throttling |
-| `--yolo-visualize` | Live camera + YOLOE detections in OpenCV window |
-| `--gui` | Show status overlay (Listening / Thinking / Speaking) |
-| `--verbose` | Debug logging |
-
-## Project layout
+## 🗂️ Project Structure
 
 ```
-main.py              Entry point and CLI dispatcher
-orchestrator.py      Async agentic loop (context, tools, proactive vision)
-tools.py             Local tools (vision, hologram, status, reminders, joke, sarcasm)
-memory.py            Session summary and persistence
-config/              Settings (Jetson/Ollama tuning) and system prompts
-audio/               Mic selection, recording, playback, Bluetooth hints
-voice/               Wake word, STT (Faster-Whisper), TTS (Piper)
-llm/                 Ollama client (OOM-hardened) and context builder
+main.py                  CLI dispatcher and entry point
+orchestrator.py          Async agentic loop (context, tools, proactive vision)
+tools.py                 Tool registry (vision, hologram, reminders, joke, sarcasm)
+memory.py                Session summary and persistence
+
+config/
+  settings.py            Jetson/Ollama tuning parameters
+  prompts.py             JARVIS persona and system prompts
+
+audio/                   Mic selection, recording, playback, Bluetooth hints
+voice/                   Wake word (openWakeWord), STT (Faster-Whisper), TTS (Piper)
+llm/                     Ollama client (OOM-hardened) and context builder
+
 vision/
-  shared.py          Process-wide singletons, enriched pipeline orchestration
-  camera.py          USB camera with auto-reconnect and portable mode
-  detector_yolo.py   YOLOE-26N TensorRT (open-vocab prompting via set_classes)
-  scene.py           Natural-language scene description from detections + vitals + threat
-  vitals.py          Fatigue (EAR), posture scoring, rPPG heart rate estimation
-  depth.py           DepthAnything V2 Small TensorRT – depth maps and point clouds
-  tracker.py         ByteTrack-lite multi-object tracking with velocity
-  threat.py          Threat/anomaly scoring (motion, unknown objects, LLM-ready)
-utils/               Power mode (battery, thermal), logging, reminders
-gui/                 Optional Tkinter status overlay with vision preview
+  camera.py              USB camera with auto-reconnect + portable mode
+  detector_yolo.py       YOLOE-26N TensorRT (open-vocab via set_classes)
+  tracker.py             ByteTrack multi-object tracking with velocity
+  depth.py               DepthAnything V2 Small TensorRT (depth + point clouds)
+  vitals.py              Fatigue (EAR), posture scoring, rPPG heart rate
+  threat.py              Threat/anomaly scoring
+  scene.py               Natural-language scene description for LLM context
+  shared.py              Pipeline orchestration and singletons
+
 server/
-  app.py             FastAPI: REST API, MJPEG, vision broadcast loop
-  bridge.py          WebSocket bridge (hologram, vitals, threat broadcasts)
-pwa/                 SvelteKit PWA frontend
-  HologramView       Three.js 3D / 2D Canvas fallback for point clouds
-  VitalsPanel        Real-time fatigue, posture, heart rate
-  VitalsMini         Compact vitals + threat for mobile
-  CameraStream       MJPEG feed with detection badges + threat border
-  StatusBar          Connection, threat level, fatigue indicators
-scripts/             Setup, export, and maintenance scripts
-tests/               Unit (247 tests) and E2E tests (pytest)
-models/              TTS voices, YOLOE + DepthAnything TensorRT engines
-data/                Session summaries and reminders (runtime)
+  app.py                 FastAPI: REST, MJPEG, vision broadcast loop
+  bridge.py              WebSocket bridge (hologram, vitals, threat broadcasts)
+
+pwa/                     SvelteKit PWA frontend
+  ChatPanel              Voice/text interaction
+  CameraStream           Live MJPEG with detection overlays
+  HologramView           Three.js 3D / 2D Canvas fallback
+  VitalsPanel            Real-time fatigue, posture, heart rate
+  HUD Overlay            Iron Man-style AR annotations
+  Dashboard              Jetson GPU/CPU/thermal stats
+
+scripts/                 Setup, export, and bootstrap scripts
+tests/                   247 unit + E2E tests (pytest)
+models/                  TTS voices, TensorRT engines
 ```
 
-## Environment variables
+---
+
+## 🔩 Hardware
+
+### Required
+
+| Component | Recommendation | Notes |
+|:---|:---|:---|
+| **Compute** | [Jetson Orin Nano Super 8GB](https://developer.nvidia.com/embedded/learn/get-started-jetson-orin-nano-devkit) | $249, 67 TOPS, shared 8GB LPDDR5 |
+| **Storage** | 128GB+ NVMe SSD or high-speed microSD | SSD strongly recommended for swap |
+| **Camera** | Any USB UVC webcam | Logitech C920/C922 work great |
+
+### Recommended
+
+| Component | Why |
+|:---|:---|
+| Bluetooth earbuds (e.g. Pixel Buds) | Wireless voice I/O via HFP/A2DP |
+| USB microphone | More reliable than BT for mic input |
+| Active cooling / fan | Sustained vision workloads generate heat |
+| NVMe SSD (512GB) | Faster model loading, better swap |
+
+### Power Mode
+
+```bash
+sudo nvpmodel -q          # Should show MAXN_SUPER
+sudo jetson_clocks         # Lock max CPU/GPU/EMC clocks
+jtop                       # Monitor (install: sudo pip3 install jetson-stats)
+```
+
+---
+
+## ⚙️ Configuration
+
+All settings are environment variables with sane defaults. Key ones:
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+|:---|:---|:---|
+| `OLLAMA_MODEL` | `qwen3:1.7b` | LLM model |
+| `OLLAMA_NUM_CTX` | `8192` | Context window (sweet spot for 8GB) |
+| `OLLAMA_NUM_PREDICT` | `512` | Max output tokens |
+| `JARVIS_DEPTH_ENABLED` | `0` | Enable 3D depth / holograms |
+| `JARVIS_PORTABLE` | `0` | Portable mode (lower res, thermal-aware) |
+| `JARVIS_SERVE_PORT` | `8000` | Server port |
+| `JARVIS_VISION_BROADCAST_SEC` | `5` | Vision broadcast interval |
+
+<details>
+<summary><strong>Full environment variable reference</strong></summary>
+
+| Variable | Default | Description |
+|:---|:---|:---|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `qwen3:1.7b` | Default LLM model |
-| `OLLAMA_NUM_CTX` | `8192` | Context window size (100% GPU sweet spot for Qwen3:1.7b) |
-| `OLLAMA_NUM_CTX_MAX` | `8192` | Hard cap (12288 works but swap pressure; 16384 spills to CPU) |
-| `OLLAMA_NUM_PREDICT` | `512` | Max output tokens (includes Qwen3 thinking tokens) |
-| `OLLAMA_THINK` | `0` | Global think flag; `chat_with_tools` forces `true` when tools present |
+| `OLLAMA_NUM_CTX` | `8192` | Context window size |
+| `OLLAMA_NUM_CTX_MAX` | `8192` | Hard cap for context |
+| `OLLAMA_NUM_PREDICT` | `512` | Max output tokens (includes thinking tokens) |
+| `OLLAMA_THINK` | `0` | Global think flag |
 | `OLLAMA_TEMPERATURE` | `0.6` | Sampling temperature |
 | `JARVIS_CAMERA_INDEX` | `0` | Camera device index |
-| `JARVIS_CAMERA_DEVICE` | (none) | Force camera device path |
+| `JARVIS_CAMERA_DEVICE` | *(none)* | Force camera device path |
 | `JARVIS_TTS_VOICE` | `models/voices/en_GB-alan-medium.onnx` | Piper voice model path |
 | `JARVIS_SERVE_HOST` | `0.0.0.0` | Server bind address |
 | `JARVIS_SERVE_PORT` | `8000` | Server port |
-| `JARVIS_CONTEXT_MAX_TURNS` | `4` | Max history turns in LLM context |
-| `JARVIS_DEPTH_ENABLED` | `0` | Enable DepthAnything depth estimation (`1` to enable) |
-| `JARVIS_PORTABLE` | `0` | Enable portable/walk-around mode (`1` to enable) |
-| `JARVIS_PORTABLE_WIDTH` | `320` | Camera width in portable mode |
-| `JARVIS_PORTABLE_HEIGHT` | `320` | Camera height in portable mode |
-| `JARVIS_PORTABLE_FPS` | `10` | Camera FPS in portable mode |
-| `JARVIS_PORTABLE_DEPTH_SKIP` | `3` | Run depth every Nth frame (portable) |
-| `JARVIS_PORTABLE_VITALS_SKIP` | `5` | Run vitals every Nth frame (portable) |
-| `JARVIS_THERMAL_PAUSE_C` | `80` | Pause non-essential vision above this temp (°C) |
-| `JARVIS_VISION_BROADCAST_SEC` | `5` | Interval (seconds) for continuous vision broadcast |
-| `JARVIS_VISION_DEPTH_EVERY` | `3` | Run depth every Nth broadcast cycle |
+| `JARVIS_CONTEXT_MAX_TURNS` | `4` | Max history turns |
+| `JARVIS_DEPTH_ENABLED` | `0` | Enable DepthAnything depth |
+| `JARVIS_PORTABLE` | `0` | Enable portable mode |
+| `JARVIS_PORTABLE_WIDTH` | `320` | Camera width (portable) |
+| `JARVIS_PORTABLE_HEIGHT` | `320` | Camera height (portable) |
+| `JARVIS_PORTABLE_FPS` | `10` | Camera FPS (portable) |
+| `JARVIS_PORTABLE_DEPTH_SKIP` | `3` | Run depth every Nth frame |
+| `JARVIS_PORTABLE_VITALS_SKIP` | `5` | Run vitals every Nth frame |
+| `JARVIS_THERMAL_PAUSE_C` | `80` | Pause vision above this temp (°C) |
+| `JARVIS_VISION_BROADCAST_SEC` | `5` | Vision broadcast interval |
+| `JARVIS_VISION_DEPTH_EVERY` | `3` | Depth every Nth broadcast |
 
-## Troubleshooting
+</details>
 
-- **Ollama OOM / cudaMalloc failed**: Run `sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'` before model load to reclaim buff/cache. Apply OOM-prevention settings with `sudo bash scripts/configure-ollama-systemd.sh`. The Python client also auto-recovers: on OOM it unloads the model, drops caches, and retries with smaller context.
-- **Model only partially on GPU** (`ollama ps` shows CPU%): Drop caches (`sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'`), restart Ollama, then load model. Memory fragmentation from repeated context-size changes can cause spill. If persistent, reduce `OLLAMA_GPU_OVERHEAD` or `OLLAMA_NUM_CTX`. Close unnecessary desktop apps.
-- **Slow responses (>10 s)**: Check `ollama ps` — model should be 100% GPU at 8192 ctx. If CPU% is >0, drop caches (`sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'`) and restart Ollama. For plain chat, ensure intent routing is sending no tools (queries without tool keywords should be 0.5–0.7 s).
-- **Bluetooth mic not working**: Prefer HFP profile for the buds or use a USB microphone and keep A2DP for output.
-- **Piper not found**: Ensure `piper-tts` is installed in the venv and the voice model exists at the configured path.
-- **Ollama connection refused**: Start Ollama with `ollama serve` or check `systemctl status ollama`.
-- **No camera**: Plug a USB UVC camera. Use `JARVIS_CAMERA_INDEX` or `JARVIS_CAMERA_DEVICE` to select the device.
-- **Hologram shows "No data"**: Ensure the server is running (`python main.py --serve`) and WebSocket is connected (check StatusBar in PWA). Hologram data is pushed automatically — no manual refresh needed.
-- **WebGL errors in browser**: The PWA automatically falls back to a 2D Canvas renderer when WebGL is unavailable (common on sandboxed/headless browsers). The 3D Three.js view requires a browser with WebGL 2.0 support.
-- **Depth engine not found**: Run `bash scripts/export_depth_engine.sh` to build the TensorRT engine. Enable with `JARVIS_DEPTH_ENABLED=1`. Without it, hologram will show detections but no point cloud.
-- **Thermal throttling (portable mode)**: If the Jetson is overheating, the vision pipeline pauses non-essential subsystems. Lower `JARVIS_PORTABLE_FPS` or improve cooling.
+---
 
-## Testing
+## 🧪 Testing
 
 ```bash
 source venv/bin/activate
 
-# Lint
-ruff check .
-
-# Unit tests (247 tests)
-pytest tests/unit/
-
-# E2E tests (requires hardware: camera, CUDA, models)
-pytest tests/e2e/ -m e2e
-
-# Quick smoke test
-python main.py --dry-run
-python main.py --one-shot "Say hello."
+ruff check .                        # Lint
+pytest tests/unit/                  # 247 unit tests
+pytest tests/e2e/ -m e2e            # E2E tests (requires hardware)
+python main.py --dry-run            # Smoke test
 ```
 
-### Test coverage
+| Module | Coverage |
+|:---|:---|
+| `vision/*` | Scene enrichment, pipeline, tracker, depth, vitals, threat |
+| `server/*` | WebSocket bridge, hologram/vitals/threat handling |
+| `llm/*` | Ollama client, context builder, OOM recovery |
+| `tools.py` | Tool schemas, registry, execution |
+| `orchestrator.py` | Intent routing, tool dispatch, context injection |
+| E2E | Vision benchmarks, hologram pipeline, vitals, portable mode |
 
-| Module | Tests |
-|--------|-------|
-| `vision/shared.py` | Scene enrichment, pipeline integration |
-| `vision/vitals.py` | EAR fatigue, posture, rPPG signal accumulation |
-| `vision/tracker.py` | ByteTrack assignment, velocity, ID persistence |
-| `vision/threat.py` | Threat scoring, level thresholds |
-| `vision/depth.py` | Depth map → point cloud conversion |
-| `server/bridge.py` | WebSocket hologram/vitals/threat request handling |
-| `tools.py` | Tool schemas, registry, `hologram_render` |
-| `utils/power.py` | Battery monitoring, thermal warnings |
-| E2E | Vision benchmarks, hologram pipeline, vitals pipeline, portable mode |
+---
+
+## 🗺️ Roadmap
+
+- [ ] **VLM integration** — LLaVA / Qwen-VL for native image understanding (replace scene-description injection)
+- [ ] **Multi-room / multi-camera** — USB hub + camera switching per room
+- [ ] **ROS 2 bridge** — publish detections/depth/vitals as ROS topics for robotics integration
+- [ ] **Multi-agent support** — multiple JARVIS instances coordinating across Jetsons
+- [ ] **Speaker diarization** — distinguish between household members
+- [ ] **Docker image** — one-pull setup for JetPack 6.x (see [Dockerfile](Dockerfile))
+- [ ] **Home Assistant integration** — control smart home devices via voice
+- [ ] **Fine-tuned JARVIS voice** — custom Piper voice model trained on Paul Bettany samples
+- [ ] **Mobile app** — React Native companion for push notifications + remote mic
+- [ ] **Gesture control** — MediaPipe hands for Iron Man-style hand gestures
+
+Want to tackle one of these? See [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+
+---
+
+## 🛠️ Troubleshooting
+
+<details>
+<summary><strong>Ollama OOM / cudaMalloc failed</strong></summary>
+
+```bash
+sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+sudo bash scripts/configure-ollama-systemd.sh
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+```
+
+The Python client also auto-recovers: on OOM it unloads the model, drops caches, and retries with progressively smaller context (8192→4096→2048→1024).
+
+</details>
+
+<details>
+<summary><strong>Model only partially on GPU</strong></summary>
+
+Check with `ollama ps`. If you see CPU%, drop caches and restart Ollama. Memory fragmentation from repeated context changes can cause spill. Close unnecessary desktop apps.
+
+</details>
+
+<details>
+<summary><strong>Slow responses (>10s)</strong></summary>
+
+Check `ollama ps` — model should be 100% GPU at 8192 ctx. For plain chat, ensure intent routing sends no tools (should be 0.5–0.7s). If still slow, reduce `OLLAMA_NUM_CTX`.
+
+</details>
+
+<details>
+<summary><strong>Bluetooth mic not working</strong></summary>
+
+Switch buds to HFP profile in `bluetoothctl` or Blueman. Or use a USB microphone for input and keep A2DP for TTS output.
+
+</details>
+
+<details>
+<summary><strong>No camera / vision errors</strong></summary>
+
+Plug a USB UVC camera. Set `JARVIS_CAMERA_INDEX` or `JARVIS_CAMERA_DEVICE` to select the right device. Check `ls /dev/video*`.
+
+</details>
+
+<details>
+<summary><strong>Hologram shows "No data"</strong></summary>
+
+Ensure `--serve` is running and WebSocket is connected (check StatusBar in PWA). Run `bash scripts/export_depth_engine.sh` and set `JARVIS_DEPTH_ENABLED=1` for 3D point clouds.
+
+</details>
+
+---
+
+## 🌟 Community
+
+**If you're running this on your Jetson, star the repo!** It helps others find it.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=steffenpharai/karen&type=Date)](https://star-history.com/#steffenpharai/karen&Date)
+
+### Get Involved
+
+- **Issues** — [Report bugs or request features](https://github.com/steffenpharai/karen/issues)
+- **Pull Requests** — [Contribute code](https://github.com/steffenpharai/karen/pulls) (see [CONTRIBUTING.md](.github/CONTRIBUTING.md))
+- **Discussions** — [Ask questions, share your setup](https://github.com/steffenpharai/karen/discussions)
+
+<!-- Uncomment when created:
+- **Discord** — [Join the KAREN community](https://discord.gg/YOUR_INVITE)
+- **Reddit** — [r/LocalLLaMA](https://reddit.com/r/LocalLLaMA) · [r/JetsonNano](https://reddit.com/r/JetsonNano)
+-->
+
+### Show Off Your Build
+
+Running KAREN on your Jetson? We'd love to see it! Open a [Discussion](https://github.com/steffenpharai/karen/discussions) with photos/video of your setup and we'll feature it here.
+
+---
+
+## 🙏 Acknowledgements
+
+Built on the shoulders of giants:
+
+- [NVIDIA Jetson](https://developer.nvidia.com/embedded-computing) — the hardware that makes edge AI real
+- [Ollama](https://ollama.com) — local LLM inference done right
+- [Ultralytics YOLOE](https://docs.ultralytics.com/models/yoloe/) — state-of-the-art open-vocab detection
+- [DepthAnything V2](https://github.com/DepthAnything/Depth-Anything-V2) — monocular depth estimation
+- [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2-powered STT
+- [Piper TTS](https://github.com/rhasspy/piper) — fast local text-to-speech
+- [openWakeWord](https://github.com/dscripka/openWakeWord) — custom wake word detection
+- [MediaPipe](https://developers.google.com/mediapipe) — face and pose estimation
+- [Three.js](https://threejs.org) — 3D visualization in the browser
+- [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — inspiration for Jetson AI packaging
+- [Jetson AI Lab](https://www.jetson-ai-lab.com) — the Jetson community's home base
+
+---
+
+<div align="center">
+
+**KAREN** is MIT licensed. Built with unreasonable ambition on a tiny board.
+
+*"I do have a life outside of making you look good, sir. It's just not very interesting."*
+
+</div>

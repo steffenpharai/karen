@@ -1,0 +1,38 @@
+# KAREN — Docker Compose for Jetson Orin Nano Super
+#
+# Prerequisites:
+#   - JetPack 6.x with nvidia-container-runtime
+#   - Ollama running on the host (or use the bundled one)
+#   - TensorRT engines built on-device in ./models/
+#
+# Usage:
+#   docker compose up -d
+#   # Access PWA at http://<jetson-ip>:8000
+
+services:
+  karen:
+    build: .
+    runtime: nvidia
+    privileged: true  # Required for Bluetooth/audio access
+    network_mode: host
+    devices:
+      - /dev/video0:/dev/video0  # USB camera
+    volumes:
+      - ./models:/app/models      # TensorRT engines (built on-device)
+      - ./data:/app/data          # Session data persistence
+      - /run/dbus:/run/dbus       # Bluetooth/audio
+    environment:
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+      - OLLAMA_MODEL=qwen3:1.7b
+      - OLLAMA_NUM_CTX=8192
+      - JARVIS_SERVE_HOST=0.0.0.0
+      - JARVIS_SERVE_PORT=8000
+      - JARVIS_DEPTH_ENABLED=0
+      # Uncomment for portable/walk-around mode:
+      # - JARVIS_PORTABLE=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
