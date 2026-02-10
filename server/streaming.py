@@ -1,6 +1,9 @@
-"""MJPEG streaming: async generator that grabs frames from the shared camera,
-runs YOLOE via the shared engine (behind the inference lock), draws detections,
-and encodes JPEG.
+"""MJPEG streaming: async generators that grab frames from the shared camera,
+optionally run YOLOE via the shared engine, draw detections, and encode JPEG.
+
+Two stream variants:
+- ``mjpeg_generator``: annotated (YOLOE boxes drawn server-side)
+- ``mjpeg_raw_generator``: raw/clean frames (for client-side HUD overlay)
 
 Uses the process-wide singletons from ``vision.shared`` so the MJPEG stream
 and the orchestrator's ``vision_analyze`` tool share a single camera handle
@@ -37,14 +40,50 @@ def _grab_annotated_jpeg() -> bytes | None:
         return None
 
 
-# ── Async generator for StreamingResponse ─────────────────────────────
+def _grab_raw_jpeg() -> bytes | None:
+    """Read one frame without annotations, encode as JPEG bytes.
+
+    Used by the HUD overlay — the client draws all tracking/detection
+    graphics on a canvas layer so the base feed must be clean.
+    """
+    try:
+        import cv2
+        from vision.shared import read_frame
+
+        frame = read_frame()
+        if frame is None:
+            return None
+
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        return buf.tobytes() if ok else None
+    except Exception as e:
+        logger.warning("MJPEG raw frame grab failed: %s", e)
+        return None
+
+
+# ── Async generators for StreamingResponse ────────────────────────────
 
 
 async def mjpeg_generator(fps: int = 10) -> AsyncGenerator[bytes, None]:
-    """Yield multipart JPEG frames for use with ``StreamingResponse``."""
+    """Yield multipart JPEG frames with YOLOE annotations."""
     interval = 1.0 / max(fps, 1)
     while True:
         jpeg = await asyncio.get_running_loop().run_in_executor(None, _grab_annotated_jpeg)
+        if jpeg is None:
+            await asyncio.sleep(interval)
+            continue
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+        )
+        await asyncio.sleep(interval)
+
+
+async def mjpeg_raw_generator(fps: int = 10) -> AsyncGenerator[bytes, None]:
+    """Yield raw (un-annotated) multipart JPEG frames for HUD overlay."""
+    interval = 1.0 / max(fps, 1)
+    while True:
+        jpeg = await asyncio.get_running_loop().run_in_executor(None, _grab_raw_jpeg)
         if jpeg is None:
             await asyncio.sleep(interval)
             continue

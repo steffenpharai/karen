@@ -52,17 +52,26 @@ export const wsSystemStats = writable<string | null>(null);
 /** Server-side interim transcript (STT partial from Jetson) */
 export const serverInterimTranscript = writable<string>('');
 
+/** Tracked object from enriched vision pipeline */
+export interface TrackedObjectData {
+	track_id: number;
+	xyxy: number[];
+	cls: number;
+	class_name: string;
+	conf: number;
+	velocity: number[];
+	depth: number | null;
+	frames_seen: number;
+	age: number;
+}
+
+/** Tracked objects store — updated every scan_result (5s) + hologram (15s) */
+export const trackedObjects = writable<TrackedObjectData[]>([]);
+
 /** Hologram data (point cloud + tracked objects) */
 export interface HologramData {
 	point_cloud: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }>;
-	tracked_objects: Array<{
-		track_id: number;
-		xyxy: number[];
-		cls: number;
-		class_name: string;
-		velocity: number[];
-		depth: number | null;
-	}>;
+	tracked_objects: TrackedObjectData[];
 	description: string;
 }
 export const hologramData = writable<HologramData | null>(null);
@@ -179,6 +188,10 @@ function handleMessage(event: MessageEvent) {
 					detections: (msg.detections as unknown[]) || [],
 					description: (msg.description as string) || ''
 				});
+				// Update tracked objects for HUD overlay (sent every 5s with scan_result)
+				if (msg.tracked && Array.isArray(msg.tracked)) {
+					trackedObjects.set(msg.tracked as TrackedObjectData[]);
+				}
 				// If threat data is bundled with scan result, update it
 				if (msg.threat) {
 					threatData.set(msg.threat as ThreatData);
@@ -197,9 +210,14 @@ function handleMessage(event: MessageEvent) {
 				wsSystemStats.set((msg.status as string) || null);
 				break;
 
-			case 'hologram':
-				hologramData.set((msg.data as HologramData) || null);
+			case 'hologram': {
+				const hData = (msg.data as HologramData) || null;
+				hologramData.set(hData);
+				if (hData?.tracked_objects) {
+					trackedObjects.set(hData.tracked_objects);
+				}
 				break;
+			}
 
 			case 'vitals':
 				vitalsData.set((msg.data as VitalsData) || null);

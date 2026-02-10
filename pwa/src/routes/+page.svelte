@@ -18,12 +18,10 @@
 	import ListeningOrb from '$lib/components/ListeningOrb.svelte';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import VoiceControls from '$lib/components/VoiceControls.svelte';
-	import CameraStream from '$lib/components/CameraStream.svelte';
+	import HudOverlay from '$lib/components/HudOverlay.svelte';
 	import Dashboard from '$lib/components/Dashboard.svelte';
 	import Reminders from '$lib/components/Reminders.svelte';
 	import Toast from '$lib/components/Toast.svelte';
-	import HologramView from '$lib/components/HologramView.svelte';
-	import VitalsPanel from '$lib/components/VitalsPanel.svelte';
 	import VitalsMini from '$lib/components/VitalsMini.svelte';
 
 	let isFolded = $state(true);
@@ -119,13 +117,17 @@
 				<VoiceControls />
 			</div>
 
-			<!-- Right pane: camera + vitals + hologram (compact) -->
-			<div class="flex flex-col min-h-0 overflow-y-auto p-3 gap-3">
-				<CameraStream />
-				<VitalsPanel />
-				<HologramView />
-				<Dashboard />
-				<Reminders />
+			<!-- Right pane: HUD (camera + AR overlay) pinned at top, rest scrolls -->
+			<div class="flex flex-col min-h-0">
+				<!-- HUD: camera feed + Iron Man AR overlay (always visible) -->
+				<div class="shrink-0 p-3 pb-1.5">
+					<HudOverlay compact={true} />
+				</div>
+				<!-- Scrollable area below HUD -->
+				<div class="flex-1 min-h-0 overflow-y-auto px-3 pb-3 flex flex-col gap-3">
+					<Dashboard />
+					<Reminders />
+				</div>
 			</div>
 		</div>
 	{:else}
@@ -143,15 +145,19 @@
 				<VoiceControls />
 			</div>
 
-			<!-- Right pane: camera + hologram + dashboard + vitals + reminders (~60%) -->
-			<div class="flex flex-col min-h-0 overflow-y-auto p-4 gap-4">
-				<CameraStream />
-				<HologramView />
-				<div class="grid grid-cols-2 gap-4">
-					<Dashboard />
-					<VitalsPanel />
+			<!-- Right pane: HUD (camera + AR overlay) pinned at top, rest scrolls (~60%) -->
+			<div class="flex flex-col min-h-0">
+				<!-- HUD: camera feed + Iron Man AR overlay (always visible) -->
+				<div class="shrink-0 p-4 pb-2">
+					<HudOverlay />
 				</div>
-				<Reminders />
+				<!-- Scrollable area below HUD -->
+				<div class="flex-1 min-h-0 overflow-y-auto px-4 pb-4 flex flex-col gap-4">
+					<div class="grid grid-cols-2 gap-4">
+						<Dashboard />
+						<Reminders />
+					</div>
+				</div>
 			</div>
 		</div>
 	{/if}

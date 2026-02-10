@@ -106,7 +106,7 @@ CONTEXT_MAX_TURNS = int(os.environ.get("JARVIS_CONTEXT_MAX_TURNS", "4"))
 SUMMARY_EVERY_N_TURNS = int(os.environ.get("JARVIS_SUMMARY_EVERY_N", "6"))
 PROACTIVE_IDLE_SEC = int(os.environ.get("JARVIS_PROACTIVE_IDLE_SEC", "300"))
 # Continuous vision broadcast interval (seconds) for PWA hologram/vitals/threat
-VISION_BROADCAST_INTERVAL = int(os.environ.get("JARVIS_VISION_BROADCAST_SEC", "5"))
+VISION_BROADCAST_INTERVAL = int(os.environ.get("JARVIS_VISION_BROADCAST_SEC", "2"))
 # How often (in multiples of VISION_BROADCAST_INTERVAL) to run depth/point cloud
 VISION_BROADCAST_DEPTH_EVERY = int(os.environ.get("JARVIS_VISION_DEPTH_EVERY", "3"))
 MAX_TOOL_CALLS_PER_TURN = int(os.environ.get("JARVIS_MAX_TOOL_CALLS", "3"))

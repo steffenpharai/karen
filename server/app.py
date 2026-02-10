@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.bridge import bridge
-from server.streaming import mjpeg_generator
+from server.streaming import mjpeg_generator, mjpeg_raw_generator
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ async def _vision_broadcast_loop() -> None:
             await bridge.broadcast({
                 "type": "scan_result",
                 "detections": data.get("detections", []),
+                "tracked": tracked,
                 "description": description,
             })
 
@@ -343,6 +344,19 @@ async def stream():
     """Live camera + YOLOE overlay as MJPEG (multipart/x-mixed-replace)."""
     return StreamingResponse(
         mjpeg_generator(fps=10),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/stream/raw")
+async def stream_raw():
+    """Raw camera MJPEG without detection annotations (for HUD overlay).
+
+    The client-side HUD draws all tracking/detection graphics on a canvas
+    layer, so the base feed must be clean.
+    """
+    return StreamingResponse(
+        mjpeg_raw_generator(fps=10),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 

@@ -10,6 +10,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { hologramData, sendHologramRequest, connectionStatus, type HologramData } from '$lib/stores/connection';
 
+	let { compact = false }: { compact?: boolean } = $props();
+
 	let container = $state<HTMLDivElement>(undefined!);
 	let canvas2d = $state<HTMLCanvasElement>(undefined!);
 
@@ -410,7 +412,7 @@
 		<div
 			bind:this={container}
 			class="w-full rounded-lg overflow-hidden"
-			style="height: 300px; min-height: 200px;"
+			style="height: {compact ? '200px' : '300px'}; min-height: {compact ? '150px' : '200px'};"
 		></div>
 	{:else}
 		<!-- 2D canvas fallback -->
@@ -419,7 +421,7 @@
 			width="640"
 			height="480"
 			class="w-full rounded-lg"
-			style="height: 300px; min-height: 200px; image-rendering: pixelated;"
+			style="height: {compact ? '200px' : '300px'}; min-height: {compact ? '150px' : '200px'}; image-rendering: pixelated;"
 		></canvas>
 	{/if}
 

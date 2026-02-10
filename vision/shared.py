@@ -590,14 +590,20 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
             for t in tracked:
                 t.depth = det_depth_map.get(tuple(t.xyxy))
 
+        # Only send objects actually detected recently (age <= 1).
+        # The tracker keeps "zombie" tracks alive for max_age=30 updates,
+        # which at 2-second intervals means 60 seconds of stale overlays.
+        # Filtering by age prevents ghost brackets when the camera moves.
         result["tracked"] = [
             {
                 "track_id": t.track_id, "xyxy": t.xyxy, "cls": t.cls,
                 "class_name": t.class_name, "conf": t.conf,
                 "velocity": t.velocity, "depth": t.depth,
                 "frames_seen": t.frames_seen,
+                "age": t.age,
             }
             for t in tracked
+            if t.age <= 1
         ]
 
         # 4. Point cloud for hologram
