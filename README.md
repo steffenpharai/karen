@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Ollama](https://img.shields.io/badge/Ollama-Qwen3_1.7b-000000?logo=ollama)](https://ollama.com)
 [![SvelteKit](https://img.shields.io/badge/SvelteKit-PWA-FF3E00?logo=svelte&logoColor=white)](https://kit.svelte.dev)
-[![Tests](https://img.shields.io/badge/tests-340_passing-brightgreen?logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/tests-395_passing-brightgreen?logo=pytest)](tests/)
 [![GitHub stars](https://img.shields.io/github/stars/steffenpharai/Jarvis?style=social)](https://github.com/steffenpharai/Jarvis)
 
 *"At your service, sir."*
@@ -93,7 +93,7 @@ Most "local AI assistants" are a chatbot with a microphone. This is what happens
 - **Accessible from any device** on the LAN
 
 ### Robustness
-- **340 unit + E2E tests** with pytest
+- **395 unit + E2E tests** with pytest (334 unit, 61 E2E)
 - **Preflight system checks** — validates all subsystems at startup with verbal status
 - **Multi-layer CUDA OOM protection** — pauses vision, unloads model, drops caches, retries with smaller context
 - **Bluetooth auto-reconnect** — daemon monitors and reconnects with exponential backoff
@@ -136,6 +136,7 @@ Real benchmarks on Jetson Orin Nano Super (8 GB), MAXN_SUPER, `jetson_clocks`:
 | Qwen3:1.7b @ 8192 ctx | ~2.0 GB | 100% GPU, flash attention + q8_0 KV |
 | YOLOE-26N TensorRT | ~0.3 GB | FP16 engine |
 | DepthAnything V2 Small | ~0.4 GB | FP16 engine, optional |
+| Perception pipeline | ~0.0 GB | CPU-only (OpenCV/NumPy), ~17ms overhead |
 | MediaPipe (face + pose) | ~0.1 GB | CPU inference |
 | Faster-Whisper small | ~0.5 GB | Loaded on demand |
 | OS + Desktop + Python | ~3.5 GB | JetPack 6.x + X11 |
@@ -347,22 +348,37 @@ main.py                  CLI dispatcher and entry point
 orchestrator.py          Async agentic loop (context, tools, proactive vision)
 tools.py                 Tool registry (vision, hologram, reminders, joke, sarcasm)
 memory.py                Session summary and persistence
+run_tests.py             Test runner helper
 
 config/
   settings.py            Jetson/Ollama tuning parameters
   prompts.py             JARVIS persona and system prompts
 
-audio/                   Mic selection, VAD recording, playback, BT auto-reconnect
-voice/                   Wake word (openWakeWord), STT (Faster-Whisper), TTS (Piper)
+audio/
+  input.py               Mic selection and audio capture
+  output.py              Audio playback (PulseAudio / ALSA)
+  vad.py                 WebRTC VAD-based adaptive recording
+  bluetooth.py           BT HFP/A2DP auto-reconnect daemon
+
+voice/
+  wakeword.py            openWakeWord wake word detection
+  stt.py                 Faster-Whisper local STT (warm-started)
+  tts.py                 Piper TTS (British male voice)
+
+llm/
+  ollama_client.py       Ollama client (OOM-hardened, context reduction)
+  context.py             XML-tagged context builder for LLM
+
 utils/
   autoconfig.py          Preflight checks and startup validation
+  logging_config.py      Centralised logging setup
   power.py               Jetson power, thermal, battery, GPU monitoring
   reminders.py           Local JSON-based reminder CRUD
-llm/                     Ollama client (OOM-hardened) and context builder
 
 vision/
   camera.py              USB camera with auto-reconnect + portable mode
   detector_yolo.py       YOLOE-26N TensorRT (open-vocab via set_classes)
+  detector_mediapipe.py  MediaPipe face mesh + pose detector
   tracker.py             ByteTrack tracking with flow-assisted prediction
   depth.py               DepthAnything V2 Small TensorRT (depth + point clouds)
   flow.py                Optical flow estimation (Farneback/DIS + sparse LK)
@@ -374,21 +390,30 @@ vision/
   proximity.py           Distance-based proximity alerts for portable mode
   scene.py               Natural-language scene description for LLM context
   shared.py              Pipeline orchestration and singletons
+  visualize.py           OpenCV live visualization (--yolo-visualize)
 
 server/
   app.py                 FastAPI: REST, MJPEG, vision broadcast loop
   bridge.py              WebSocket bridge (hologram, vitals, threat broadcasts)
+  streaming.py           MJPEG frame streaming helpers
 
 pwa/                     SvelteKit PWA frontend
-  ChatPanel              Voice/text interaction
+  ChatPanel              Voice/text interaction + chat persistence
   CameraStream           Live MJPEG with detection overlays
   HologramView           Three.js 3D / 2D Canvas fallback
+  HudOverlay             Iron Man-style AR tracking annotations
   VitalsPanel            Real-time fatigue, posture, heart rate
-  HUD Overlay            Iron Man-style AR annotations
+  VitalsMini             Compact vitals strip for mobile
   Dashboard              Jetson GPU/CPU/thermal stats
+  Reminders              Voice/UI reminder management
+  ListeningOrb           Animated listening state indicator
+  VoiceControls          Mic/speaker toggle controls
+  SettingsPanel          Runtime configuration UI
+  StatusBar              Connection status + system indicators
+  Toast                  Notification toasts
 
 scripts/                 Setup, export, and bootstrap scripts
-tests/                   ~340 unit + E2E tests (pytest)
+tests/                   395 tests (334 unit + 61 E2E) with pytest
 models/                  TTS voices, TensorRT engines
 ```
 
@@ -433,46 +458,61 @@ All settings are environment variables with sane defaults. Key ones:
 | `OLLAMA_NUM_CTX` | `8192` | Context window (sweet spot for 8GB) |
 | `OLLAMA_NUM_PREDICT` | `512` | Max output tokens |
 | `JARVIS_DEPTH_ENABLED` | `0` | Enable 3D depth / holograms |
+| `JARVIS_PERCEPTION_ENABLED` | `1` | Enable advanced perception pipeline |
 | `JARVIS_PORTABLE` | `0` | Portable mode (lower res, thermal-aware) |
 | `JARVIS_SERVE_PORT` | `8000` | Server port |
-| `JARVIS_VISION_BROADCAST_SEC` | `5` | Vision broadcast interval |
+| `JARVIS_VISION_BROADCAST_SEC` | `2` | Vision broadcast interval |
 
 <details>
 <summary><strong>Full environment variable reference</strong></summary>
 
 | Variable | Default | Description |
 |:---|:---|:---|
+| | **LLM / Ollama** | |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `qwen3:1.7b` | Default LLM model |
+| `OLLAMA_FALLBACK_MODEL` | `qwen3:1.7b` | Fallback model on OOM |
 | `OLLAMA_NUM_CTX` | `8192` | Context window size |
 | `OLLAMA_NUM_CTX_MAX` | `8192` | Hard cap for context |
 | `OLLAMA_NUM_PREDICT` | `512` | Max output tokens (includes thinking tokens) |
-| `OLLAMA_THINK` | `0` | Global think flag |
+| `OLLAMA_THINK` | `0` | Global think flag (`1` = enable) |
 | `OLLAMA_TEMPERATURE` | `0.6` | Sampling temperature |
+| | **Vision** | |
 | `JARVIS_CAMERA_INDEX` | `0` | Camera device index |
 | `JARVIS_CAMERA_DEVICE` | *(none)* | Force camera device path |
-| `JARVIS_TTS_VOICE` | `models/voices/en_GB-alan-medium.onnx` | Piper voice model path |
-| `JARVIS_SERVE_HOST` | `0.0.0.0` | Server bind address |
-| `JARVIS_SERVE_PORT` | `8000` | Server port |
-| `JARVIS_CONTEXT_MAX_TURNS` | `4` | Max history turns |
 | `JARVIS_DEPTH_ENABLED` | `0` | Enable DepthAnything depth |
-| `JARVIS_PORTABLE` | `0` | Enable portable mode |
-| `JARVIS_PORTABLE_WIDTH` | `320` | Camera width (portable) |
-| `JARVIS_PORTABLE_HEIGHT` | `320` | Camera height (portable) |
-| `JARVIS_PORTABLE_FPS` | `10` | Camera FPS (portable) |
-| `JARVIS_PORTABLE_DEPTH_SKIP` | `3` | Run depth every Nth frame |
-| `JARVIS_PORTABLE_VITALS_SKIP` | `5` | Run vitals every Nth frame |
-| `JARVIS_THERMAL_PAUSE_C` | `80` | Pause vision above this temp (°C) |
-| `JARVIS_VISION_BROADCAST_SEC` | `5` | Vision broadcast interval |
+| `JARVIS_VISION_BROADCAST_SEC` | `2` | Vision broadcast interval (seconds) |
 | `JARVIS_VISION_DEPTH_EVERY` | `3` | Depth every Nth broadcast |
+| | **Perception** | |
 | `JARVIS_PERCEPTION_ENABLED` | `1` | Enable advanced perception pipeline |
 | `JARVIS_FLOW_METHOD` | `farneback` | Optical flow method (`farneback` or `dis`) |
 | `JARVIS_FLOW_WIDTH` | `320` | Flow computation width |
 | `JARVIS_FLOW_HEIGHT` | `240` | Flow computation height |
 | `JARVIS_TRAJ_HORIZON` | `3.0` | Trajectory prediction horizon (seconds) |
 | `JARVIS_COLLISION_ZONE_M` | `2.0` | Collision alert distance threshold (metres) |
-| `JARVIS_PORTABLE_PERCEPTION_SKIP` | `2` | Skip perception every Nth frame (portable) |
 | `JARVIS_MOTION_WAKE_THRESHOLD` | `0.05` | Motion magnitude to trigger active scanning |
+| | **Voice / Audio** | |
+| `JARVIS_TTS_VOICE` | `models/voices/en_GB-alan-medium.onnx` | Piper voice model path |
+| | **Server** | |
+| `JARVIS_SERVE_HOST` | `0.0.0.0` | Server bind address |
+| `JARVIS_SERVE_PORT` | `8000` | Server port |
+| `JARVIS_WS_PATH` | `/ws` | WebSocket endpoint path |
+| `JARVIS_HTTPS_CERT` | *(none)* | Path to TLS certificate (.pem) for wss:// |
+| `JARVIS_HTTPS_KEY` | *(none)* | Path to TLS private key (.key) for wss:// |
+| | **Orchestrator** | |
+| `JARVIS_CONTEXT_MAX_TURNS` | `4` | Max history turns |
+| `JARVIS_SUMMARY_EVERY_N` | `6` | Summarise memory every N turns |
+| `JARVIS_PROACTIVE_IDLE_SEC` | `300` | Seconds idle before proactive comment |
+| `JARVIS_MAX_TOOL_CALLS` | `3` | Max tool calls per LLM turn |
+| | **Portable mode** | |
+| `JARVIS_PORTABLE` | `0` | Enable portable mode |
+| `JARVIS_PORTABLE_WIDTH` | `320` | Camera width (portable) |
+| `JARVIS_PORTABLE_HEIGHT` | `320` | Camera height (portable) |
+| `JARVIS_PORTABLE_FPS` | `10` | Camera FPS (portable) |
+| `JARVIS_PORTABLE_DEPTH_SKIP` | `3` | Run depth every Nth frame |
+| `JARVIS_PORTABLE_VITALS_SKIP` | `5` | Run vitals every Nth frame |
+| `JARVIS_PORTABLE_PERCEPTION_SKIP` | `2` | Skip perception every Nth frame |
+| `JARVIS_THERMAL_PAUSE_C` | `80` | Pause vision above this temp (°C) |
 
 </details>
 
@@ -484,7 +524,7 @@ All settings are environment variables with sane defaults. Key ones:
 source venv/bin/activate
 
 ruff check .                        # Lint
-pytest tests/unit/                  # ~340 unit tests
+pytest tests/unit/                  # 334 unit tests
 pytest tests/e2e/ -m e2e            # E2E tests (requires hardware)
 python main.py --dry-run            # Smoke test
 ```
