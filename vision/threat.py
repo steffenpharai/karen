@@ -80,6 +80,7 @@ class ThreatScorer:
         tracked_objects: list | None = None,
         vitals=None,
         depth_map=None,
+        perception_result=None,
     ) -> ThreatAssessment:
         """Evaluate threat level from current scene data.
 
@@ -88,6 +89,7 @@ class ThreatScorer:
         tracked_objects : list of TrackedObject (from ByteTrackLite)
         vitals : VitalsResult (from VitalsAnalyzer), or None
         depth_map : HxW float32 depth (0=near, 1=far), or None
+        perception_result : PerceptionResult with trajectories/collision alerts
 
         Returns
         -------
@@ -167,6 +169,48 @@ class ThreatScorer:
                     alerts.append(
                         f"Fast-moving vehicle: {name} (track {t.track_id}, "
                         f"{speed:.0f} px/s)"
+                    )
+
+        # ── 7. Trajectory-based collision risk (from perception pipeline) ──
+        if perception_result is not None:
+            collision_alerts = getattr(perception_result, "collision_alerts", [])
+            for ca in collision_alerts:
+                severity = getattr(ca, "severity", "notice")
+                ttc = getattr(ca, "time_to_collision", 99)
+                class_name = getattr(ca, "class_name", "object")
+                speed = getattr(ca, "speed_mps", 0)
+                distance = getattr(ca, "distance_m", 0)
+
+                if severity == "critical":
+                    raw_level += 4
+                    alerts.append(
+                        f"COLLISION RISK: {class_name} at {speed:.1f}m/s, "
+                        f"{distance:.1f}m away, impact in {ttc:.1f}s"
+                    )
+                elif severity == "warning":
+                    raw_level += 2
+                    alerts.append(
+                        f"Approaching {class_name} at {speed:.1f}m/s, "
+                        f"{distance:.1f}m, ~{ttc:.1f}s to contact"
+                    )
+                elif severity == "notice":
+                    raw_level += 1
+                    alerts.append(
+                        f"Object approaching: {class_name} ({ttc:.1f}s)"
+                    )
+
+            # Ego-motion awareness: if walking and objects nearby, slight boost
+            ego = getattr(perception_result, "ego_motion", None)
+            if ego is not None and ego.is_moving:
+                close_objects = sum(
+                    1 for t in tracks
+                    if getattr(t, "depth", None) is not None and t.depth < 0.2
+                )
+                if close_objects > 0:
+                    raw_level += 1
+                    alerts.append(
+                        f"Moving ({ego.motion_type}) with {close_objects} "
+                        f"close object(s)"
                     )
 
         # ── Clamp and smooth ──────────────────────────────────────────

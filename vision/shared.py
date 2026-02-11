@@ -1,4 +1,4 @@
-"""Process-wide singletons for camera, YOLOE engine, MediaPipe, vitals, depth, tracker.
+"""Process-wide singletons for camera, YOLOE engine, MediaPipe, vitals, depth, tracker, perception.
 
 Every consumer in the Jarvis process (MJPEG ``/stream``, orchestrator
 ``vision_analyze`` tool, ``--e2e`` vision thread, ``--yolo-visualize``) MUST
@@ -13,6 +13,7 @@ Thread safety
   CUDA execution context is **not** thread-safe on the Orin's single GPU.
 * ``_vitals_lock`` serialises vitals analysis (Face Mesh + Pose).
 * ``_depth_lock`` serialises DepthAnything inference.
+* ``_perception_lock`` serialises the perception pipeline (flow + ego-motion).
 * ``_vision_paused`` flag allows temporarily pausing vision during OOM.
 """
 
@@ -30,6 +31,7 @@ _frame_lock = threading.Lock()
 _inference_lock = threading.Lock()
 _vitals_lock = threading.Lock()
 _depth_lock = threading.Lock()
+_perception_lock = threading.Lock()
 
 # ── Vision pause/resume (for OOM resilience) ──────────────────────────
 _vision_paused = False
@@ -518,29 +520,35 @@ def describe_current_scene(prompt: str | None = None) -> str:
 
 
 def describe_current_scene_enriched(prompt: str | None = None) -> dict:
-    """Full enriched vision pipeline: YOLOE + tracking + depth + vitals + threat.
+    """Full enriched vision pipeline: YOLOE + tracking + depth + flow + ego-motion + trajectory + vitals + threat.
 
     Returns a dict with keys:
       description: str (enriched text for LLM context)
       vitals_text: str (compact vitals summary)
       threat_text: str (compact threat summary)
+      perception_text: str (motion/trajectory/ego summary for LLM)
       detections: list[dict] (raw detections)
       tracked: list[dict] (tracked objects as dicts)
       depth_map: ndarray or None
       point_cloud: list[dict] (for hologram)
       vitals: VitalsResult or None
       threat: ThreatAssessment or None
+      perception: PerceptionResult or None
+      collision_alerts: list[dict] (proactive collision warnings)
     """
     result = {
         "description": "",
         "vitals_text": "",
         "threat_text": "",
+        "perception_text": "",
         "detections": [],
         "tracked": [],
         "depth_map": None,
         "point_cloud": [],
         "vitals": None,
         "threat": None,
+        "perception": None,
+        "collision_alerts": [],
     }
 
     try:
@@ -549,18 +557,20 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
             return result
 
         # Thermal throttle check (pause non-essential in portable mode)
+        thermal_throttled = False
         try:
             from utils.power import should_throttle_vision
 
             if should_throttle_vision():
                 logger.info("Thermal/power throttle: skipping enriched vision this cycle")
-                # Still do basic YOLOE but skip depth/vitals
+                thermal_throttled = True
+                # Still do basic YOLOE but skip depth/vitals/perception
         except Exception:
             pass
 
         from vision.depth import depth_at_boxes, generate_point_cloud
         from vision.detector_mediapipe import detect_faces
-        from vision.scene import describe_scene_enriched
+        from vision.scene import describe_scene_enriched, describe_scene_with_perception
 
         # Drain V4L2 buffer so we analyse the *current* view, not a
         # stale buffered frame from before the camera moved.
@@ -599,7 +609,7 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
         run_depth_this_frame = (not portable) or (_enriched_call_count_depth % depth_skip == 0)
         describe_current_scene_enriched._depth_counter = _enriched_call_count_depth + 1
 
-        depth_map = run_depth_shared(frame) if run_depth_this_frame else None
+        depth_map = run_depth_shared(frame) if (run_depth_this_frame and not thermal_throttled) else None
         result["depth_map"] = depth_map
         depth_values = depth_at_boxes(depth_map, dets) if depth_map is not None else []
 
@@ -613,31 +623,80 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
             for t in tracked:
                 t.depth = det_depth_map.get(tuple(t.xyxy))
 
+        # 4. Advanced perception pipeline (flow + ego-motion + trajectory)
+        perception = None
+        if not thermal_throttled:
+            _enriched_call_count_perc = getattr(
+                describe_current_scene_enriched, "_perception_counter", 0
+            )
+            perc_skip = getattr(settings, "PORTABLE_PERCEPTION_SKIP", 1)
+            run_perc = (not portable) or (_enriched_call_count_perc % perc_skip == 0)
+            describe_current_scene_enriched._perception_counter = _enriched_call_count_perc + 1
+
+            if run_perc:
+                perception = run_perception_shared(
+                    frame, dets, tracked, depth_map, depth_values,
+                )
+        result["perception"] = perception
+
+        # Extract collision alerts for proactive TTS
+        if perception is not None:
+            result["collision_alerts"] = [
+                {
+                    "track_id": a.track_id,
+                    "class_name": a.class_name,
+                    "speed_mps": a.speed_mps,
+                    "distance_m": a.distance_m,
+                    "time_to_collision": a.time_to_collision,
+                    "direction": a.direction,
+                    "severity": a.severity,
+                    "message": a.message,
+                }
+                for a in (perception.collision_alerts or [])
+            ]
+            result["perception_text"] = perception.trajectory_summary or ""
+
         # Only send objects actually detected recently (age <= 1).
-        # The tracker keeps "zombie" tracks alive for max_age=30 updates,
-        # which at 2-second intervals means 60 seconds of stale overlays.
-        # Filtering by age prevents ghost brackets when the camera moves.
-        result["tracked"] = [
-            {
+        tracked_dicts = []
+        for t in tracked:
+            if t.age > 1:
+                continue
+            td = {
                 "track_id": t.track_id, "xyxy": t.xyxy, "cls": t.cls,
                 "class_name": t.class_name, "conf": t.conf,
                 "velocity": t.velocity, "depth": t.depth,
                 "frames_seen": t.frames_seen,
                 "age": t.age,
             }
-            for t in tracked
-            if t.age <= 1
-        ]
+            # Enrich with perception data if available
+            if perception is not None:
+                idx = next(
+                    (j for j, tr in enumerate(tracked)
+                     if getattr(tr, "track_id", None) == t.track_id),
+                    None,
+                )
+                if idx is not None:
+                    vels = perception.object_velocities_mps
+                    if idx < len(vels) and vels[idx] is not None:
+                        td["velocity_mps"] = vels[idx]
+                    trajs = perception.trajectories
+                    if idx < len(trajs):
+                        traj = trajs[idx]
+                        td["behaviour"] = traj.behaviour
+                        td["time_to_collision"] = traj.time_to_collision
+                        td["collision_risk"] = traj.collision_risk
+            tracked_dicts.append(td)
+        result["tracked"] = tracked_dicts
 
-        # 4. Point cloud for hologram
+        # 5. Point cloud for hologram
         if depth_map is not None:
             result["point_cloud"] = generate_point_cloud(frame, depth_map)
 
-        # 5. Face detection
+        # 6. Face detection
         face_det = get_face_detector()
         faces = detect_faces(face_det, frame) if face_det else []
 
-        # 6. Vitals (with portable frame skipping)
+        # 7. Vitals (with portable frame skipping)
         _enriched_call_count_vitals = getattr(
             describe_current_scene_enriched, "_vitals_counter", 0
         )
@@ -645,27 +704,41 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
         run_vitals_this_frame = (not portable) or (_enriched_call_count_vitals % vitals_skip == 0)
         describe_current_scene_enriched._vitals_counter = _enriched_call_count_vitals + 1
 
-        vitals = run_vitals_shared(frame) if run_vitals_this_frame else None
+        vitals = run_vitals_shared(frame) if (run_vitals_this_frame and not thermal_throttled) else None
         result["vitals"] = vitals
 
-        # 7. Threat assessment
-        # Use a module-level threat scorer (stateful for smoothing)
+        # 8. Threat assessment (with perception-enhanced collision data)
         threat_scorer = _get_threat_scorer()
-        threat = threat_scorer.score_scene(tracked, vitals, depth_map)
+        threat = threat_scorer.score_scene(
+            tracked, vitals, depth_map,
+            perception_result=perception,
+        )
         result["threat"] = threat
 
-        # 8. Build enriched description
-        result["description"] = describe_scene_enriched(
-            dets,
-            face_count=len(faces),
-            class_names=class_names,
-            tracked_objects=tracked,
-            depth_values=depth_values,
-            vitals=vitals,
-            threat=threat,
-        )
+        # 9. Build enriched description (use perception-aware variant if available)
+        if perception is not None:
+            result["description"] = describe_scene_with_perception(
+                dets,
+                face_count=len(faces),
+                class_names=class_names,
+                tracked_objects=tracked,
+                depth_values=depth_values,
+                vitals=vitals,
+                threat=threat,
+                perception_result=perception,
+            )
+        else:
+            result["description"] = describe_scene_enriched(
+                dets,
+                face_count=len(faces),
+                class_names=class_names,
+                tracked_objects=tracked,
+                depth_values=depth_values,
+                vitals=vitals,
+                threat=threat,
+            )
 
-        # 9. Compact text summaries for LLM context
+        # 10. Compact text summaries for LLM context
         if vitals:
             vparts = []
             if vitals.fatigue_level != "unknown":
@@ -684,6 +757,76 @@ def describe_current_scene_enriched(prompt: str | None = None) -> dict:
         logger.warning("describe_current_scene_enriched failed: %s", e)
         result["description"] = "Vision temporarily unavailable."
         return result
+
+
+# ── Perception pipeline singleton ─────────────────────────────────────
+_perception_pipeline: Any | None = None
+_perception_pipeline_initialised = False
+
+
+def get_perception_pipeline():
+    """Lazily create and return the shared PerceptionPipeline."""
+    global _perception_pipeline, _perception_pipeline_initialised
+    if _perception_pipeline_initialised:
+        return _perception_pipeline
+    with _init_lock:
+        if _perception_pipeline_initialised:
+            return _perception_pipeline
+        perception_enabled = getattr(settings, "PERCEPTION_ENABLED", True)
+        if not perception_enabled:
+            logger.info("Perception pipeline disabled by config")
+            _perception_pipeline_initialised = True
+            return None
+        try:
+            from vision.flow import FlowMethod
+            from vision.perception import PerceptionPipeline
+
+            flow_method_str = getattr(settings, "FLOW_METHOD", "farneback")
+            flow_method = (
+                FlowMethod.DIS if flow_method_str == "dis" else FlowMethod.FARNEBACK
+            )
+            flow_w = getattr(settings, "FLOW_WIDTH", 320)
+            flow_h = getattr(settings, "FLOW_HEIGHT", 240)
+            horizon = getattr(settings, "TRAJECTORY_HORIZON_SEC", 3.0)
+            collision_zone = getattr(settings, "COLLISION_ZONE_M", 2.0)
+            fps = getattr(settings, "CAMERA_FPS", 30)
+            if getattr(settings, "PORTABLE_MODE", False):
+                fps = getattr(settings, "PORTABLE_FPS", 10)
+
+            _perception_pipeline = PerceptionPipeline(
+                flow_method=flow_method,
+                flow_resize=(flow_w, flow_h),
+                prediction_horizon=horizon,
+                collision_zone_m=collision_zone,
+                fps=fps,
+            )
+            logger.info(
+                "Perception pipeline initialised: flow=%s %dx%d, horizon=%.1fs",
+                flow_method_str, flow_w, flow_h, horizon,
+            )
+        except Exception as e:
+            logger.warning("Perception pipeline init failed: %s", e)
+            _perception_pipeline = None
+        _perception_pipeline_initialised = True
+    return _perception_pipeline
+
+
+def run_perception_shared(frame, detections, tracked, depth_map=None, depth_values=None):
+    """Run perception pipeline behind the perception lock.
+
+    Returns PerceptionResult or None.
+    """
+    pipeline = get_perception_pipeline()
+    if pipeline is None or frame is None:
+        return None
+    with _perception_lock:
+        try:
+            return pipeline.process_frame(
+                frame, detections, tracked, depth_map, depth_values,
+            )
+        except Exception as e:
+            logger.warning("Perception pipeline failed: %s", e)
+            return None
 
 
 # ── Threat scorer singleton ───────────────────────────────────────────

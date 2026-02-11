@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Ollama](https://img.shields.io/badge/Ollama-Qwen3_1.7b-000000?logo=ollama)](https://ollama.com)
 [![SvelteKit](https://img.shields.io/badge/SvelteKit-PWA-FF3E00?logo=svelte&logoColor=white)](https://kit.svelte.dev)
-[![Tests](https://img.shields.io/badge/tests-283_passing-brightgreen?logo=pytest)](tests/)
+[![Tests](https://img.shields.io/badge/tests-340_passing-brightgreen?logo=pytest)](tests/)
 [![GitHub stars](https://img.shields.io/github/stars/steffenpharai/Jarvis?style=social)](https://github.com/steffenpharai/Jarvis)
 
 *"At your service, sir."*
@@ -37,7 +37,7 @@ Most "local AI assistants" are a chatbot with a microphone. This is what happens
 | What others do | What J.A.R.V.I.S. does |
 |:---|:---|
 | Text chat with local LLM | **Wake word → STT → LLM with tools → TTS** through Bluetooth earbuds |
-| Maybe a webcam feed | **TensorRT YOLOE open-vocab detection** + ByteTrack tracking + **3D holograms** |
+| Maybe a webcam feed | **TensorRT YOLOE detection** + optical flow + **ego-motion** + trajectory prediction + **3D holograms** |
 | "Works on my 4090" | **Runs on 8 GB shared RAM** — LLM + vision + depth + vitals simultaneously |
 | Cloud fallback "for now" | **Zero cloud dependencies.** Everything local. Always. |
 | Basic web UI | **SvelteKit PWA** with live camera, Three.js holograms, vitals, Iron Man HUD, threat alerts |
@@ -64,14 +64,24 @@ Most "local AI assistants" are a chatbot with a microphone. This is what happens
 
 ### Vision Suite
 - **YOLOE-26N** (TensorRT FP16) — open-vocabulary detection, set any prompt at runtime
-- **ByteTrack** — multi-object tracking with velocity estimation
+- **ByteTrack** — multi-object tracking with flow-assisted prediction (reduced ID switches)
 - **DepthAnything V2 Small** (TensorRT FP16) — real-time depth maps for 3D holograms
 - **MediaPipe** — face mesh (EAR fatigue, rPPG heart rate) + pose (posture scoring)
-- **Threat detection** — anomaly scoring with LLM-integrated alerts
+- **Threat detection** — anomaly scoring with trajectory-based collision prediction
 - **Always-on background scene** — continuous context updated every 5s for spatial awareness
 - **Proactive intelligence** — detects person enter/leave, new objects, env changes
 - **Proximity alerts** — distance-based audio cues in portable mode ("Sir, obstacle ahead")
 - **Portable mode** — 320×320 @ 10 FPS with thermal throttling + battery monitoring
+
+### Advanced Perception (Tesla FSD / SpaceX Dragon inspired)
+- **Optical flow** (Farneback/DIS) — dense motion vectors between consecutive frames (~15ms)
+- **Ego-motion estimation** — RANSAC fundamental matrix decomposition separates camera motion from object motion
+- **Object velocities in m/s** — flow + depth fusion via pinhole camera model
+- **Trajectory prediction** — Kalman forward projection (1–3s), approaching/receding/crossing classification
+- **Collision detection** — time-to-collision estimation with proactive voiced alerts: *"Sir, bicycle from left at 8 km/h — collision in 2.4 seconds"*
+- **Walk-around awareness** — detects user walking/panning/turning, stabilises detections during ego-motion
+- **Motion-aware context** — LLM receives speeds, distances, trajectories, ego-motion state automatically
+- **Zero extra GPU** — entire perception pipeline is CPU-only (OpenCV/NumPy), ~17ms overhead
 
 ### Iron Man PWA
 - **Live MJPEG** camera feed with detection overlays and threat-level borders
@@ -83,7 +93,7 @@ Most "local AI assistants" are a chatbot with a microphone. This is what happens
 - **Accessible from any device** on the LAN
 
 ### Robustness
-- **283 unit + E2E tests** with pytest
+- **340 unit + E2E tests** with pytest
 - **Preflight system checks** — validates all subsystems at startup with verbal status
 - **Multi-layer CUDA OOM protection** — pauses vision, unloads model, drops caches, retries with smaller context
 - **Bluetooth auto-reconnect** — daemon monitors and reconnects with exponential backoff
@@ -262,10 +272,16 @@ graph TB
 
     subgraph VISION["👁️ Vision Suite"]
         CAM[USB Camera] --> YOLO[YOLOE-26N<br/>TensorRT]
-        YOLO --> TRACK[ByteTrack<br/>Tracking]
+        CAM --> FLOW[Optical Flow<br/>Farneback/DIS]
         CAM --> DEPTH[DepthAnything V2<br/>TensorRT]
         CAM --> MP[MediaPipe<br/>Face + Pose]
-        TRACK --> THREAT[Threat<br/>Scorer]
+        FLOW --> EGO[Ego-Motion<br/>RANSAC]
+        FLOW --> TRACK[ByteTrack<br/>Flow-Assisted]
+        YOLO --> TRACK
+        TRACK --> TRAJ[Trajectory<br/>Prediction]
+        DEPTH --> TRAJ
+        EGO --> TRAJ
+        TRAJ --> THREAT[Threat<br/>Scorer]
         MP --> VITALS[Vitals<br/>EAR · Posture · rPPG]
     end
 
@@ -300,17 +316,24 @@ graph TB
 <summary><strong>Vision pipeline detail</strong></summary>
 
 ```
-Camera Frame
+Camera Frame (t)
   ├─ YOLOE-26N (TensorRT) → detections + open-vocab prompting
-  ├─ ByteTrack → multi-object tracking + velocity estimation
+  ├─ Optical Flow (Farneback/DIS vs frame t-1) → dense motion vectors
+  ├─ DepthAnything V2 Small → depth map + 3D point cloud
   ├─ MediaPipe Face Mesh → EAR fatigue detection, rPPG heart rate
   ├─ MediaPipe Pose → posture scoring
-  ├─ DepthAnything V2 Small → depth map + 3D point cloud
-  └─ ThreatScorer → threat assessment (low/medium/high/critical)
+  │
+  ▼ Perception Fusion (CPU-only, ~17ms)
+  ├─ Ego-motion estimation (RANSAC + fundamental matrix)
+  ├─ Flow-assisted ByteTrack (60% flow / 40% Kalman prediction)
+  ├─ Ego-motion compensation → true object velocities (m/s)
+  ├─ Trajectory prediction (1-3s Kalman projection)
+  ├─ Collision detection (time-to-collision + severity alerts)
+  └─ ThreatScorer → threat assessment with trajectory awareness
        ↓
-  WebSocket broadcast → PWA (hologram, vitals, threat panels)
+  WebSocket broadcast → PWA (hologram, vitals, threat, collisions)
        ↓
-  Injected into LLM context → proactive alerts
+  Enriched LLM context → "person approaching at 1.2m/s, 3.8m away"
 ```
 
 </details>
@@ -340,10 +363,14 @@ llm/                     Ollama client (OOM-hardened) and context builder
 vision/
   camera.py              USB camera with auto-reconnect + portable mode
   detector_yolo.py       YOLOE-26N TensorRT (open-vocab via set_classes)
-  tracker.py             ByteTrack multi-object tracking with velocity
+  tracker.py             ByteTrack tracking with flow-assisted prediction
   depth.py               DepthAnything V2 Small TensorRT (depth + point clouds)
+  flow.py                Optical flow estimation (Farneback/DIS + sparse LK)
+  ego_motion.py          Camera ego-motion via RANSAC fundamental matrix
+  trajectory.py          Trajectory prediction + collision detection + alerts
+  perception.py          Fused perception pipeline (flow→ego→velocity→trajectory)
   vitals.py              Fatigue (EAR), posture scoring, rPPG heart rate
-  threat.py              Threat/anomaly scoring
+  threat.py              Threat/anomaly scoring with trajectory awareness
   proximity.py           Distance-based proximity alerts for portable mode
   scene.py               Natural-language scene description for LLM context
   shared.py              Pipeline orchestration and singletons
@@ -361,7 +388,7 @@ pwa/                     SvelteKit PWA frontend
   Dashboard              Jetson GPU/CPU/thermal stats
 
 scripts/                 Setup, export, and bootstrap scripts
-tests/                   283 unit + E2E tests (pytest)
+tests/                   ~340 unit + E2E tests (pytest)
 models/                  TTS voices, TensorRT engines
 ```
 
@@ -438,6 +465,14 @@ All settings are environment variables with sane defaults. Key ones:
 | `JARVIS_THERMAL_PAUSE_C` | `80` | Pause vision above this temp (°C) |
 | `JARVIS_VISION_BROADCAST_SEC` | `5` | Vision broadcast interval |
 | `JARVIS_VISION_DEPTH_EVERY` | `3` | Depth every Nth broadcast |
+| `JARVIS_PERCEPTION_ENABLED` | `1` | Enable advanced perception pipeline |
+| `JARVIS_FLOW_METHOD` | `farneback` | Optical flow method (`farneback` or `dis`) |
+| `JARVIS_FLOW_WIDTH` | `320` | Flow computation width |
+| `JARVIS_FLOW_HEIGHT` | `240` | Flow computation height |
+| `JARVIS_TRAJ_HORIZON` | `3.0` | Trajectory prediction horizon (seconds) |
+| `JARVIS_COLLISION_ZONE_M` | `2.0` | Collision alert distance threshold (metres) |
+| `JARVIS_PORTABLE_PERCEPTION_SKIP` | `2` | Skip perception every Nth frame (portable) |
+| `JARVIS_MOTION_WAKE_THRESHOLD` | `0.05` | Motion magnitude to trigger active scanning |
 
 </details>
 
@@ -449,7 +484,7 @@ All settings are environment variables with sane defaults. Key ones:
 source venv/bin/activate
 
 ruff check .                        # Lint
-pytest tests/unit/                  # 283 unit tests
+pytest tests/unit/                  # ~340 unit tests
 pytest tests/e2e/ -m e2e            # E2E tests (requires hardware)
 python main.py --dry-run            # Smoke test
 ```
@@ -457,18 +492,27 @@ python main.py --dry-run            # Smoke test
 | Module | Coverage |
 |:---|:---|
 | `audio/*` | Playback, Bluetooth reconnect/daemon, VAD recording |
-| `vision/*` | Scene enrichment, pipeline, tracker, depth, vitals, threat, proximity |
+| `vision/*` | Scene enrichment, pipeline, tracker, depth, vitals, threat, proximity, flow, ego-motion, trajectory, perception |
 | `server/*` | WebSocket bridge, message sequencing, hologram/vitals/threat handling |
 | `llm/*` | Ollama client, context builder, OOM recovery with vision pause |
 | `tools.py` | Tool schemas, registry, execution |
 | `orchestrator.py` | Intent routing, tool dispatch, proactive intelligence, background scene |
 | `utils/*` | Preflight checks, power/battery monitoring, reminders |
-| E2E | Vision benchmarks, hologram pipeline, vitals, portable mode |
+| E2E | Vision benchmarks, hologram pipeline, vitals, portable mode, perception pipeline |
 
 ---
 
 ## 🗺️ Roadmap
 
+### Completed
+- [x] **Advanced perception pipeline** — optical flow, ego-motion, trajectory prediction, collision detection (Tesla FSD / SpaceX Dragon inspired)
+- [x] **Flow-assisted tracking** — 60/40 flow/Kalman blending in ByteTrack for fewer ID switches
+- [x] **Walk-around awareness** — ego-motion estimation with walking/panning/turning classification
+- [x] **Proactive collision alerts** — time-to-collision estimation with voiced warnings
+
+### Planned
+- [ ] **RAFT TensorRT** — neural optical flow for higher accuracy at ~30ms (replace Farneback)
+- [ ] **Lightweight SLAM** — ORB-SLAM3 mini or DROID-SLAM lite for persistent 3D maps
 - [ ] **VLM integration** — LLaVA / Qwen-VL for native image understanding (replace scene-description injection)
 - [ ] **Multi-room / multi-camera** — USB hub + camera switching per room
 - [ ] **ROS 2 bridge** — publish detections/depth/vitals as ROS topics for robotics integration

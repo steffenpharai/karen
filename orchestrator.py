@@ -503,9 +503,19 @@ async def run_orchestrator(
                         # Check for environmental changes (person enter/leave, new objects)
                         change_alert = _check_proactive_changes(vision_data)
 
+                        # Collision alerts (highest priority — immediate safety)
+                        collision_alerts = vision_data.get("collision_alerts", [])
+                        collision_say = None
+                        for ca in collision_alerts:
+                            if ca.get("severity") in ("critical", "warning"):
+                                collision_say = ca.get("message", "")
+                                break
+
                         # Proactive vitals alert
                         say_text = None
-                        if change_alert:
+                        if collision_say:
+                            say_text = collision_say  # collision overrides everything
+                        elif change_alert:
                             say_text = change_alert
                         elif proactive_vitals and getattr(proactive_vitals, "fatigue_level", "unknown") in ("moderate", "severe"):
                             say_text = "Sir, you appear quite fatigued. Might I suggest a brief respite. Even Mr. Stark took the occasional break."
@@ -528,7 +538,7 @@ async def run_orchestrator(
                             if bridge is not None:
                                 await bridge.send_proactive(say_text)
 
-                        # Broadcast vitals/threat to PWA
+                        # Broadcast vitals/threat/perception to PWA
                         if bridge is not None and proactive_vitals:
                             await bridge.broadcast({
                                 "type": "vitals",
@@ -539,6 +549,18 @@ async def run_orchestrator(
                                     "hr_confidence": getattr(proactive_vitals, "heart_rate_confidence", 0),
                                     "alerts": getattr(proactive_vitals, "alerts", []),
                                 },
+                            })
+                        if bridge is not None and collision_alerts:
+                            await bridge.broadcast({
+                                "type": "collision_alerts",
+                                "data": collision_alerts,
+                            })
+                        # Broadcast perception summary
+                        perception_text = vision_data.get("perception_text", "")
+                        if bridge is not None and perception_text:
+                            await bridge.broadcast({
+                                "type": "perception",
+                                "data": {"summary": perception_text},
                             })
                     except Exception as e:
                         logger.debug("Proactive vision check failed: %s", e)
@@ -588,6 +610,14 @@ async def run_orchestrator(
                     vision_description = vision_data.get("description")
                     vitals_text = vision_data.get("vitals_text")
                     threat_text = vision_data.get("threat_text")
+
+                    # Inject perception context (ego-motion, trajectories, collisions)
+                    perception_text = vision_data.get("perception_text", "")
+                    if perception_text:
+                        vision_description = (
+                            (vision_description or "")
+                            + f" Motion: {perception_text}"
+                        )
                 except Exception:
                     vision_description = await loop.run_in_executor(
                         None, run_tool, "vision_analyze", {},

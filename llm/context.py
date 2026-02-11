@@ -36,8 +36,8 @@ def _build_context_block(
     if system_stats:
         parts.append(f"<sys>{system_stats}</sys>")
     if vision_description:
-        # Cap scene to ~200 chars to save tokens
-        parts.append(f"<scene>{vision_description[:200]}</scene>")
+        # Cap scene to ~350 chars (increased for perception: trajectories, ego-motion)
+        parts.append(f"<scene>{vision_description[:350]}</scene>")
     if vitals_text:
         parts.append(f"<vitals>{vitals_text[:100]}</vitals>")
     if threat_text:

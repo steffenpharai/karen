@@ -89,6 +89,24 @@ def yolo_engine_exists() -> bool:
 DEPTH_ENGINE_PATH = os.path.join(PROJECT_ROOT, "models", "depth_anything_v2_small.engine")
 DEPTH_ENABLED = os.environ.get("JARVIS_DEPTH_ENABLED", "0") == "1"
 
+# ── Advanced perception (optical flow + ego-motion + trajectory) ──────
+# Master switch — enables flow, ego-motion, trajectory prediction pipeline.
+# CPU-only (OpenCV) — zero extra GPU memory.
+PERCEPTION_ENABLED = os.environ.get("JARVIS_PERCEPTION_ENABLED", "1") == "1"
+# Optical flow method: "farneback" (accurate, ~15ms) or "dis" (faster, ~8ms)
+FLOW_METHOD = os.environ.get("JARVIS_FLOW_METHOD", "farneback")
+# Flow computation resolution (W, H).  Smaller = faster.
+FLOW_WIDTH = int(os.environ.get("JARVIS_FLOW_WIDTH", "320"))
+FLOW_HEIGHT = int(os.environ.get("JARVIS_FLOW_HEIGHT", "240"))
+# Trajectory prediction horizon (seconds ahead)
+TRAJECTORY_HORIZON_SEC = float(os.environ.get("JARVIS_TRAJ_HORIZON", "3.0"))
+# Collision danger zone radius (meters) for proactive alerts
+COLLISION_ZONE_M = float(os.environ.get("JARVIS_COLLISION_ZONE_M", "2.0"))
+# Skip perception every N frames in portable mode (1 = every frame)
+PORTABLE_PERCEPTION_SKIP = int(os.environ.get("JARVIS_PORTABLE_PERCEPTION_SKIP", "2"))
+# Motion energy threshold to trigger active scanning (0-1)
+MOTION_WAKE_THRESHOLD = float(os.environ.get("JARVIS_MOTION_WAKE_THRESHOLD", "0.05"))
+
 # ── Portable / walk-around mode ──────────────────────────────────────
 PORTABLE_MODE = os.environ.get("JARVIS_PORTABLE", "0") == "1"
 PORTABLE_WIDTH = int(os.environ.get("JARVIS_PORTABLE_WIDTH", "320"))

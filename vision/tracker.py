@@ -6,6 +6,10 @@ vision pipeline on Jetson Orin Nano 8 GB.
 Each detection from YOLOE is matched to existing tracks by IoU.  Unmatched
 detections create new tracks; unmatched tracks are aged out after a timeout.
 Velocity vectors are computed per track for the threat module.
+
+Enhanced with optical-flow-assisted prediction: when flow vectors are provided,
+the Kalman prediction incorporates per-object flow displacement for more accurate
+next-position estimates — reducing ID switches during fast motion or ego-motion.
 """
 
 import logging
@@ -52,14 +56,33 @@ class SimpleKalmanBox:
         self.vy = 0.0
         self._last_time = time.monotonic()
 
-    def predict(self) -> list[float]:
-        """Predict next position using constant-velocity model."""
+    def predict(self, flow_hint: tuple[float, float] | None = None) -> list[float]:
+        """Predict next position using constant-velocity model.
+
+        Parameters
+        ----------
+        flow_hint : optional (dx, dy) from optical flow.  When provided,
+            the prediction blends Kalman velocity with flow displacement
+            (alpha=0.6 flow, 0.4 Kalman) for more robust prediction during
+            fast motion or ego-motion scenarios.
+        """
         now = time.monotonic()
         dt = now - self._last_time
         if dt > 5.0:
             dt = 0.0  # don't extrapolate too far
-        pred_cx = self.cx + self.vx * dt
-        pred_cy = self.cy + self.vy * dt
+
+        if flow_hint is not None and dt > 0:
+            # Blend flow-based displacement with Kalman velocity
+            flow_vx = flow_hint[0] / max(dt, 0.001)
+            flow_vy = flow_hint[1] / max(dt, 0.001)
+            blend_vx = 0.6 * flow_vx + 0.4 * self.vx
+            blend_vy = 0.6 * flow_vy + 0.4 * self.vy
+            pred_cx = self.cx + blend_vx * dt
+            pred_cy = self.cy + blend_vy * dt
+        else:
+            pred_cx = self.cx + self.vx * dt
+            pred_cy = self.cy + self.vy * dt
+
         x1 = pred_cx - self.w / 2.0
         y1 = pred_cy - self.h / 2.0
         x2 = pred_cx + self.w / 2.0
@@ -184,12 +207,19 @@ class ByteTrackLite:
         self._next_id = 1
         self._tracks: list[dict] = []  # internal track state
 
-    def update(self, detections: list[dict]) -> list[TrackedObject]:
+    def update(
+        self,
+        detections: list[dict],
+        flow_vectors: list[tuple[float, float] | None] | None = None,
+    ) -> list[TrackedObject]:
         """Match detections to existing tracks and return updated tracked objects.
 
         Parameters
         ----------
         detections : list of dicts with keys: xyxy, conf, cls, (optional) class_name
+        flow_vectors : optional per-track flow hints from optical flow.
+            If provided, used to improve Kalman prediction for each track,
+            reducing ID switches during fast motion or camera ego-motion.
 
         Returns
         -------
@@ -197,11 +227,16 @@ class ByteTrackLite:
         """
         now = time.monotonic()
 
-        # Predict positions for existing tracks
+        # Predict positions for existing tracks (optionally flow-assisted)
         predicted_boxes = []
-        for t in self._tracks:
+        for idx, t in enumerate(self._tracks):
             kf: SimpleKalmanBox = t["kf"]
-            pred = kf.predict()
+            # Flow-assisted prediction: if we have a flow hint for this track,
+            # use it to bias the Kalman prediction
+            flow_hint = None
+            if flow_vectors and idx < len(flow_vectors):
+                flow_hint = flow_vectors[idx]
+            pred = kf.predict(flow_hint=flow_hint)
             t["predicted_xyxy"] = pred
             predicted_boxes.append(pred)
 
