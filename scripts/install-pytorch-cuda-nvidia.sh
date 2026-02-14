@@ -6,8 +6,8 @@
 #     https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048
 #     (Look for JetPack 6.x section; PyTorch 2.3–2.8.)
 #   • Jetson AI Lab index (JetPack 6.2 + CUDA 12.6):
-#     https://pypi.jetson-ai-lab.dev/jp6/cu126/
-#     pip install torch torchvision --extra-index-url https://pypi.jetson-ai-lab.dev/jp6/cu126/
+#     https://pypi.jetson-ai-lab.io/jp6/cu126/
+#     pip install torch torchvision --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126/
 #   • Official NVIDIA redist (sometimes older):
 #     https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/ (or v60)
 #
@@ -21,7 +21,7 @@ cd "$PROJECT_ROOT"
 
 # Prefer Jetson AI Lab index for JetPack 6.2 + CUDA 12.6 (set to 0 to use NVIDIA redist only)
 USE_JETSON_AI_LAB="${USE_JETSON_AI_LAB:-1}"
-JETSON_AI_LAB_INDEX="https://pypi.jetson-ai-lab.dev/jp6/cu126/"
+JETSON_AI_LAB_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126/"
 
 # NVIDIA official redist fallback (JetPack 6.0/6.1; v61)
 JP_VERSION="${JP_VERSION:-61}"
